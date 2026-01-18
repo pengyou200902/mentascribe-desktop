@@ -9,7 +9,7 @@
 
   color-scheme: dark;
   color: rgba(255, 255, 255, 0.87);
-  background-color: #1a1a1a;
+  background-color: transparent;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -17,12 +17,122 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-body {
+html, body {
   margin: 0;
-  min-height: 100vh;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
 }
 
-/* Custom scrollbar */
+/* Dictation bar container - transparent background */
+.dictation-container {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+/* Floating dictation bar - Wispr Flow style */
+.dictation-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: rgba(30, 30, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+  cursor: grab;
+  user-select: none;
+  min-width: 200px;
+}
+
+.dictation-bar:active {
+  cursor: grabbing;
+}
+
+/* Recording indicator dot */
+.indicator-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.indicator-dot.idle {
+  background: #4b5563;
+}
+
+.indicator-dot.recording {
+  background: #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.indicator-dot.processing {
+  background: #eab308;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.4);
+  animation: pulse-dot 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* Waveform visualization */
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.waveform-bar {
+  width: 3px;
+  min-height: 6px;
+  background: #6b7280;
+  border-radius: 2px;
+  transition: height 0.1s ease, background 0.2s ease;
+}
+
+.waveform-bar.active {
+  background: linear-gradient(to top, #3b82f6, #60a5fa);
+  animation: waveform-pulse 0.3s ease-in-out infinite alternate;
+}
+
+@keyframes waveform-pulse {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Status text */
+.status-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+  min-width: 70px;
+}
+
+/* Custom scrollbar for settings window */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

@@ -53,24 +53,23 @@ export const History: FC<HistoryProps> = ({ onBack }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+        <h2 className="text-xl font-semibold">History</h2>
+        <div className="flex items-center gap-3">
+          {history.length > 0 && (
+            <button
+              onClick={clearHistory}
+              className="text-red-400 hover:text-red-300 text-sm"
+            >
+              Clear all
+            </button>
+          )}
           <button
             onClick={onBack}
-            className="text-gray-400 hover:text-white"
+            className="text-gray-400 hover:text-white px-3 py-1 rounded hover:bg-gray-700"
           >
-            &larr; Back
+            Close
           </button>
-          <h2 className="text-xl font-semibold">History</h2>
         </div>
-
-        {history.length > 0 && (
-          <button
-            onClick={clearHistory}
-            className="text-red-400 hover:text-red-300 text-sm"
-          >
-            Clear all
-          </button>
-        )}
       </div>
 
       {history.length === 0 ? (

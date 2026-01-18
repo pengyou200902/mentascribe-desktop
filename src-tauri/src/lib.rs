@@ -5,7 +5,11 @@ mod injection;
 mod settings;
 mod api;
 
-use tauri::Emitter;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+};
 use std::sync::Mutex;
 
 pub struct AppState {
@@ -114,6 +118,44 @@ fn get_available_models() -> Vec<transcription::ModelInfo> {
     transcription::whisper::get_available_models()
 }
 
+fn open_settings_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show().ok();
+        window.set_focus().ok();
+    } else {
+        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html#settings".into()))
+            .title("MentaScribe Settings")
+            .inner_size(480.0, 640.0)
+            .resizable(true)
+            .build()
+            .ok();
+    }
+}
+
+fn open_history_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("history") {
+        window.show().ok();
+        window.set_focus().ok();
+    } else {
+        WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
+            .title("MentaScribe History")
+            .inner_size(480.0, 500.0)
+            .resizable(true)
+            .build()
+            .ok();
+    }
+}
+
+fn toggle_dictation_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("dictation") {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().ok();
+        } else {
+            window.show().ok();
+        }
+    }
+}
+
 pub fn run() {
     env_logger::init();
 
@@ -128,7 +170,51 @@ pub fn run() {
         .setup(|app| {
             // Initialize global hotkey
             let app_handle = app.handle().clone();
-            hotkey::setup_hotkey(app_handle)?;
+            hotkey::setup_hotkey(app_handle.clone())?;
+
+            // Build tray menu
+            let settings_item = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+            let history_item = MenuItem::with_id(app, "history", "History...", true, None::<&str>)?;
+            let toggle_item = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+            let menu = Menu::with_items(
+                app,
+                &[&settings_item, &history_item, &toggle_item, &quit_item],
+            )?;
+
+            // Build tray icon
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .menu_on_left_click(false)
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "settings" => {
+                        open_settings_window(app);
+                    }
+                    "history" => {
+                        open_history_window(app);
+                    }
+                    "toggle" => {
+                        toggle_dictation_window(app);
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        toggle_dictation_window(app);
+                    }
+                })
+                .build(app)?;
 
             Ok(())
         })

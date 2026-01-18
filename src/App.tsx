@@ -1,26 +1,32 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { MenuBar } from './components/MenuBar';
+import { DictationBar } from './components/DictationBar';
 import { Settings } from './components/Settings';
-import { TranscriptionOverlay } from './components/TranscriptionOverlay';
 import { History } from './components/History';
 import { useStore } from './lib/store';
 
-type View = 'main' | 'settings' | 'history';
+type WindowType = 'dictation' | 'settings' | 'history';
 
 function App() {
-  const [view, setView] = useState<View>('main');
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [lastTranscription, setLastTranscription] = useState<string | null>(null);
+  const [audioLevel, setAudioLevel] = useState(0);
   const { settings, loadSettings } = useStore();
 
+  // Determine which window type we're in based on URL hash
+  const getWindowType = (): WindowType => {
+    const hash = window.location.hash.slice(1);
+    if (hash === 'settings') return 'settings';
+    if (hash === 'history') return 'history';
+    return 'dictation';
+  };
+
+  const [windowType] = useState<WindowType>(getWindowType);
+
   useEffect(() => {
-    // Load settings on mount
     loadSettings();
 
-    // Listen for hotkey events
     const unlistenPressed = listen('hotkey-pressed', async () => {
       if (settings?.hotkey?.mode === 'toggle') {
         if (isRecording) {
@@ -29,7 +35,6 @@ function App() {
           await startRecording();
         }
       } else {
-        // Hold mode
         await startRecording();
       }
     });
@@ -44,9 +49,12 @@ function App() {
       setIsProcessing(true);
     });
 
-    const unlistenComplete = listen<string>('transcription-complete', (event) => {
+    const unlistenComplete = listen<string>('transcription-complete', () => {
       setIsProcessing(false);
-      setLastTranscription(event.payload);
+    });
+
+    const unlistenAudioLevel = listen<number>('audio-level', (event) => {
+      setAudioLevel(event.payload);
     });
 
     return () => {
@@ -54,6 +62,7 @@ function App() {
       unlistenReleased.then((f) => f());
       unlistenProcessing.then((f) => f());
       unlistenComplete.then((f) => f());
+      unlistenAudioLevel.then((f) => f());
     };
   }, [isRecording, settings]);
 
@@ -72,7 +81,6 @@ function App() {
       setIsRecording(false);
 
       if (text) {
-        // Inject text into active application
         await invoke('inject_text', { text });
       }
     } catch (error) {
@@ -81,37 +89,31 @@ function App() {
     }
   }
 
+  // Render based on window type
+  if (windowType === 'settings') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4">
+        <Settings onBack={() => window.close()} />
+      </div>
+    );
+  }
+
+  if (windowType === 'history') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4">
+        <History onBack={() => window.close()} />
+      </div>
+    );
+  }
+
+  // Main dictation bar overlay
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <MenuBar
-        currentView={view}
-        onViewChange={setView}
+    <div className="dictation-container">
+      <DictationBar
         isRecording={isRecording}
+        isProcessing={isProcessing}
+        audioLevel={audioLevel}
       />
-
-      <main className="p-4">
-        {view === 'main' && (
-          <div className="space-y-4">
-            <TranscriptionOverlay
-              isRecording={isRecording}
-              isProcessing={isProcessing}
-              lastTranscription={lastTranscription}
-            />
-
-            <div className="text-center text-gray-400 text-sm">
-              <p>Press <kbd className="px-2 py-1 bg-gray-700 rounded">F6</kbd> to start dictating</p>
-            </div>
-          </div>
-        )}
-
-        {view === 'settings' && (
-          <Settings onBack={() => setView('main')} />
-        )}
-
-        {view === 'history' && (
-          <History onBack={() => setView('main')} />
-        )}
-      </main>
     </div>
   );
 }

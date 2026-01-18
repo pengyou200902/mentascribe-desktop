@@ -64,14 +64,14 @@ export const Settings: FC<SettingsProps> = ({ onBack }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Settings</h2>
         <button
           onClick={onBack}
-          className="text-gray-400 hover:text-white"
+          className="text-gray-400 hover:text-white px-3 py-1 rounded hover:bg-gray-700"
         >
-          &larr; Back
+          Close
         </button>
-        <h2 className="text-xl font-semibold">Settings</h2>
       </div>
 
       {/* Transcription Settings */}

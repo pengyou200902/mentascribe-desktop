@@ -17,12 +17,32 @@
     },
     "windows": [
       {
+        "label": "dictation",
         "title": "MentaScribe",
-        "width": 400,
-        "height": 600,
+        "width": 280,
+        "height": 56,
+        "resizable": false,
+        "fullscreen": false,
+        "visible": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": false,
+        "x": 560,
+        "y": 900,
+        "shadow": false
+      },
+      {
+        "label": "settings",
+        "title": "MentaScribe Settings",
+        "width": 480,
+        "height": 640,
         "resizable": true,
         "fullscreen": false,
-        "visible": false
+        "visible": false,
+        "decorations": true,
+        "url": "index.html#settings"
       }
     ],
     "security": {
