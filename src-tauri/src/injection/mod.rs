@@ -7,6 +7,38 @@ pub enum InjectionError {
     Failed(String),
     #[error("Platform not supported")]
     UnsupportedPlatform,
+    #[error("Accessibility permission required. Go to System Settings > Privacy & Security > Accessibility and enable MentaScribe")]
+    AccessibilityPermissionRequired,
+}
+
+/// Check if we have Accessibility permissions on macOS
+#[cfg(target_os = "macos")]
+fn check_accessibility_permissions() -> bool {
+    use std::process::Command;
+
+    // Use AppleScript to check if we're trusted
+    // AXIsProcessTrusted() would be better but requires linking to ApplicationServices
+    let output = Command::new("osascript")
+        .args(["-e", "tell application \"System Events\" to return (exists process \"Finder\")"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            // If we can query System Events, we likely have accessibility permissions
+            let success = out.status.success();
+            eprintln!("[inject] Accessibility check: {}", if success { "granted" } else { "denied" });
+            success
+        }
+        Err(e) => {
+            eprintln!("[inject] Accessibility check failed: {}", e);
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_accessibility_permissions() -> bool {
+    true // No special permissions needed on other platforms
 }
 
 /// Inject text into the currently focused application
@@ -34,6 +66,13 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
     if text.contains("[BLANK_AUDIO]") || text.contains("[BLANK AUDIO]") {
         eprintln!("[inject] Skipping BLANK_AUDIO marker");
         return Ok(());
+    }
+
+    // Check accessibility permissions before attempting injection
+    #[cfg(target_os = "macos")]
+    if !check_accessibility_permissions() {
+        eprintln!("[inject] ERROR: Accessibility permissions not granted");
+        return Err(InjectionError::AccessibilityPermissionRequired);
     }
 
     // Small delay to allow focus to return to the target application

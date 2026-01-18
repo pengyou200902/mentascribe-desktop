@@ -1,6 +1,6 @@
 # MentaScribe Desktop - AI Agent Handoff Document
 
-**Last Updated:** 2026-01-18 (Waveform animation improvements)
+**Last Updated:** 2026-01-18 14:01:05 EST (Accessibility permissions check + frontend timing fix)
 **Status:** Implementation Complete - Bug Fixes Applied
 
 ---
@@ -152,7 +152,7 @@ once_cell = "1.19" # Lazy static for model cache
 5. **Auto-capitalize** - Verify "hello. world" becomes "Hello. World"
 6. **History** - Transcribe and check History window
 
-### Bug Fixes Applied (2025-01-18):
+### Bug Fixes Applied (2026-01-18):
 
 **1. Waveform Animation Not Visible**
 - **Issue:** Waveform bars were static/too small during recording
@@ -181,6 +181,32 @@ once_cell = "1.19" # Lazy static for model cache
 - **Cause:** `key_name` parameter used directly in `'static` closure
 - **Fix:** Convert to owned `String` with `.to_string()` and `.clone()`
 - **File:** `src-tauri/src/hotkey/mod.rs`
+
+**5. Audio Capture Race Condition (Buffer Cleared During Stop)**
+- **Issue:** Transcription failed with "Input sample buffer was empty" even though audio was recorded
+- **Cause:** Race condition in `stop_capture()` / `start_capture()`:
+  1. `stop_capture()` takes the `AUDIO_THREAD` handle (releasing lock)
+  2. While waiting for audio thread to join, another `start_recording` comes in
+  3. `start_capture()` checks `AUDIO_THREAD.is_some()` → false (handle was taken)
+  4. `start_capture()` proceeds and clears `AUDIO_BUFFER`
+  5. Original `stop_capture()` finishes join and reads empty buffer
+- **Fix:** Added `IS_STOPPING` flag:
+  - Set to `true` at start of `stop_capture()`
+  - Checked in `start_capture()` - returns error if stopping in progress
+  - Cleared at end of `stop_capture()` after buffer is read
+- **File:** `src-tauri/src/audio/capture.rs`
+
+**6. Frontend Timing Bug (Duplicate Hotkey Events)**
+- **Issue:** Multiple `start_recording` calls happening before any `stop_recording`
+- **Cause:** `isRecordingRef` was only set to `true` AFTER `await invoke('start_recording')` completed. If another hotkey event fired during the await, the guard check would pass.
+- **Fix:** Set `isRecordingRef.current = true` IMMEDIATELY before the await, reset on error. Same pattern applied to `stopRecording()` with `isProcessingRef`.
+- **File:** `src/App.tsx`
+
+**7. Text Injection Silent Failure (macOS Accessibility)**
+- **Issue:** Text injection reported success but nothing was typed into editor
+- **Cause:** enigo library silently fails when app lacks macOS Accessibility permissions - doesn't throw an error
+- **Fix:** Added `check_accessibility_permissions()` function that uses AppleScript to check if we can interact with System Events. Returns proper error if denied.
+- **File:** `src-tauri/src/injection/mod.rs`
 
 ### Critical Requirements:
 

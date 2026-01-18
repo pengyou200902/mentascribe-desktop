@@ -37,6 +37,8 @@ lazy_static::lazy_static! {
     static ref SAMPLE_RATE: Mutex<u32> = Mutex::new(16000);
     static ref CHANNELS: Mutex<u16> = Mutex::new(1);
     static ref CURRENT_AUDIO_LEVEL: Mutex<f32> = Mutex::new(0.0);
+    /// Flag to prevent start_capture while stop_capture is in progress
+    static ref IS_STOPPING: Mutex<bool> = Mutex::new(false);
 }
 
 /// Calculate RMS (root mean square) audio level from samples
@@ -55,6 +57,12 @@ pub fn get_current_level() -> f32 {
 
 pub fn start_capture() -> Result<(), AudioError> {
     eprintln!("[capture] start_capture called");
+
+    // Check if stop is in progress (prevents race condition)
+    if *IS_STOPPING.lock().unwrap() {
+        eprintln!("[capture] ERROR: Stop in progress, cannot start new capture");
+        return Err(AudioError::AlreadyRunning);
+    }
 
     // Check if already running
     if AUDIO_THREAD.lock().unwrap().is_some() {
@@ -181,12 +189,20 @@ pub fn start_capture() -> Result<(), AudioError> {
 pub fn stop_capture() -> Result<AudioData, AudioError> {
     eprintln!("[capture] stop_capture called");
 
+    // Set stopping flag to prevent new captures from starting
+    *IS_STOPPING.lock().unwrap() = true;
+    eprintln!("[capture] IS_STOPPING flag set to true");
+
     // Take the thread handle
     let handle = AUDIO_THREAD
         .lock()
         .unwrap()
         .take()
-        .ok_or(AudioError::NotRunning)?;
+        .ok_or_else(|| {
+            // Clear stopping flag on error
+            *IS_STOPPING.lock().unwrap() = false;
+            AudioError::NotRunning
+        })?;
 
     // Send stop signal
     eprintln!("[capture] Sending stop signal...");
@@ -228,6 +244,10 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
             max_amplitude, rms
         );
     }
+
+    // Clear stopping flag now that we're done
+    *IS_STOPPING.lock().unwrap() = false;
+    eprintln!("[capture] IS_STOPPING flag cleared");
 
     Ok(AudioData {
         samples,

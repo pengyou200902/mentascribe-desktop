@@ -67,12 +67,16 @@ function App() {
       console.log('Already recording or processing, skipping start');
       return;
     }
+    // Set ref immediately to prevent duplicate calls during await
+    isRecordingRef.current = true;
     try {
       console.log('Starting recording...');
       await invoke('start_recording');
       setIsRecording(true);
       console.log('Recording started');
     } catch (error) {
+      // Reset ref on error
+      isRecordingRef.current = false;
       console.error('Failed to start recording:', error);
     }
   }, []);
@@ -82,6 +86,9 @@ function App() {
       console.log('Not recording, skipping stop');
       return;
     }
+    // Set refs immediately to prevent duplicate calls during await
+    isRecordingRef.current = false;
+    isProcessingRef.current = true;
     try {
       console.log('Stopping recording...');
       setIsRecording(false);
@@ -123,6 +130,7 @@ function App() {
       }
       setTimeout(() => setError(null), 5000);
     } finally {
+      isProcessingRef.current = false; // Reset ref immediately
       setIsProcessing(false); // Always reset processing state
     }
   }, [saveToHistory]);
