@@ -167,10 +167,26 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Initialize global hotkey
             let app_handle = app.handle().clone();
             hotkey::setup_hotkey(app_handle.clone())?;
+
+            // Position dictation window at bottom center, above the dock
+            if let Some(window) = app.get_webview_window("dictation") {
+                if let Some(monitor) = window.current_monitor().ok().flatten() {
+                    let screen_size = monitor.size();
+                    let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(200, 48));
+
+                    // Center horizontally, position 100px from bottom (above dock)
+                    let x = (screen_size.width as i32 - window_size.width as i32) / 2;
+                    let y = screen_size.height as i32 - window_size.height as i32 - 100;
+
+                    window.set_position(tauri::PhysicalPosition::new(x, y)).ok();
+                    window.show().ok();
+                }
+            }
 
             // Build tray menu
             let settings_item = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
@@ -187,7 +203,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .menu_on_left_click(false)
+                .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "settings" => {
                         open_settings_window(app);

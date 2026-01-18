@@ -19,19 +19,17 @@
       {
         "label": "dictation",
         "title": "MentaScribe",
-        "width": 280,
-        "height": 56,
+        "width": 200,
+        "height": 48,
         "resizable": false,
         "fullscreen": false,
-        "visible": true,
+        "visible": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "center": false,
-        "x": 560,
-        "y": 900,
-        "shadow": false
+        "shadow": false,
+        "backgroundColor": [0, 0, 0, 0]
       },
       {
         "label": "settings",
@@ -45,6 +43,7 @@
         "url": "index.html#settings"
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": "default-src 'self'; connect-src https://api.voice.mentaflux.ai; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'"
     }

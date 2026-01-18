@@ -17,40 +17,66 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-html, body {
+html, body, #root {
   margin: 0;
   padding: 0;
-  background: transparent;
+  background: transparent !important;
+  background-color: transparent !important;
   overflow: hidden;
+  width: 100%;
+  height: 100%;
 }
 
-/* Dictation bar container - transparent background */
+/* Dictation bar container - fill window, transparent */
 .dictation-container {
-  width: 100vw;
-  height: 100vh;
+  background: transparent !important;
+  background-color: transparent !important;
+  -webkit-background-color: transparent;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
+  padding: 0;
+  margin: 0;
 }
 
 /* Floating dictation bar - Wispr Flow style */
 .dictation-bar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
-  background: rgba(30, 30, 30, 0.95);
+  padding: 8px 14px;
+  background: rgba(50, 50, 50, 0.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-radius: 28px;
+  border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.4),
-    0 2px 8px rgba(0, 0, 0, 0.2);
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 1px 4px rgba(0, 0, 0, 0.15);
   cursor: grab;
   user-select: none;
-  min-width: 200px;
+  -webkit-user-select: none;
+  -webkit-app-region: drag;
+  max-width: fit-content;
+}
+
+.drag-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Microphone icon */
+.mic-icon {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.7);
+  transition: color 0.2s ease;
+}
+
+.dictation-bar:hover .mic-icon {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .dictation-bar:active {
@@ -114,9 +140,14 @@ html, body {
   animation: waveform-pulse 0.3s ease-in-out infinite alternate;
 }
 
+.waveform-bar.processing {
+  background: linear-gradient(to top, #ca8a04, #facc15);
+  animation: waveform-pulse 0.5s ease-in-out infinite alternate;
+}
+
 @keyframes waveform-pulse {
   from {
-    opacity: 0.8;
+    opacity: 0.7;
   }
   to {
     opacity: 1;
@@ -127,9 +158,8 @@ html, body {
 .status-text {
   font-size: 13px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;
-  min-width: 70px;
 }
 
 /* Custom scrollbar for settings window */
