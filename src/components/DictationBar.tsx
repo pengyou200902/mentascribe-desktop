@@ -5,46 +5,103 @@ interface DictationBarProps {
   isRecording: boolean;
   isProcessing: boolean;
   audioLevel?: number;
+  error?: string | null;
+  statusOverride?: string;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
   isRecording,
   isProcessing,
   audioLevel = 0,
+  error = null,
+  statusOverride,
 }) => {
-  const [waveformBars, setWaveformBars] = useState<number[]>(Array(10).fill(0.2));
-  const animationRef = useRef<number>();
   const isDragging = useRef(false);
+  const prevLevelsRef = useRef<number[]>(Array(12).fill(0.15));
+  const audioLevelRef = useRef(audioLevel);
+  const isProcessingRef = useRef(isProcessing);
+  const targetHeightsRef = useRef<number[]>(Array(12).fill(0.15));
+  const lastUpdateRef = useRef(0);
+  const [waveformBars, setWaveformBars] = useState<number[]>(Array(12).fill(0.15));
+
+  // Keep refs in sync
+  useEffect(() => {
+    audioLevelRef.current = audioLevel;
+  }, [audioLevel]);
 
   useEffect(() => {
-    if (isRecording) {
-      const animate = () => {
-        setWaveformBars((prev) =>
-          prev.map(() => {
-            const base = audioLevel > 0 ? audioLevel : 0.5;
-            return Math.random() * base * 0.7 + 0.3;
-          })
-        );
-        animationRef.current = requestAnimationFrame(animate);
-      };
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
-      const interval = setInterval(() => {
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current);
-        }
-        animate();
-      }, 80);
-
-      return () => {
-        clearInterval(interval);
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current);
-        }
-      };
-    } else {
-      setWaveformBars(Array(10).fill(0.2));
+  // Continuously animate waveform when recording or processing
+  useEffect(() => {
+    if (!isRecording && !isProcessing) {
+      setWaveformBars(Array(12).fill(0.15));
+      prevLevelsRef.current = Array(12).fill(0.15);
+      targetHeightsRef.current = Array(12).fill(0.15);
+      lastUpdateRef.current = 0;
+      return;
     }
-  }, [isRecording, audioLevel]);
+
+    // Immediately set bars to visible random heights when starting
+    const initialHeights = Array(12).fill(0).map(() => 0.4 + Math.random() * 0.3);
+    prevLevelsRef.current = initialHeights;
+    targetHeightsRef.current = initialHeights;
+    setWaveformBars(initialHeights);
+
+    let animationFrameId: number;
+
+    const animate = () => {
+      const level = audioLevelRef.current;
+      const now = Date.now();
+
+      // Update target heights frequently for responsive animation
+      const updateInterval = 40; // ~25fps for target updates
+
+      if (now - lastUpdateRef.current > updateInterval) {
+        lastUpdateRef.current = now;
+
+        // Generate new random target heights based on audio level
+        targetHeightsRef.current = targetHeightsRef.current.map(() => {
+          if (isProcessingRef.current) {
+            // During processing, show gentle pulsing animation
+            return 0.35 + Math.random() * 0.4; // 0.35-0.75 range
+          }
+
+          // During recording: respond to audio level
+          // Base height ensures visible animation even when quiet
+          // Use wider range for more visible movement
+          const baseHeight = 0.3 + Math.random() * 0.4; // 0.3-0.7 range
+
+          // Audio boost: when speaking, bars grow taller
+          // level is 0-1, multiply for dramatic effect
+          const audioBoost = level * (0.3 + Math.random() * 0.5);
+
+          // Combine: base + audio response, capped at 1.0
+          return Math.min(1.0, baseHeight + audioBoost);
+        });
+      }
+
+      // Smoothly interpolate towards target heights
+      const newBars = prevLevelsRef.current.map((prevHeight, i) => {
+        const target = targetHeightsRef.current[i];
+        // Fast interpolation for snappy, visible response
+        const smoothing = 0.4;
+        return prevHeight + (target - prevHeight) * smoothing;
+      });
+
+      prevLevelsRef.current = newBars;
+      setWaveformBars(newBars);
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isRecording, isProcessing]);
 
   const handleMouseDown = async (e: React.MouseEvent) => {
     // Only drag on left click
@@ -91,7 +148,7 @@ export const DictationBar: FC<DictationBarProps> = ({
                 key={i}
                 className={`waveform-bar ${isRecording ? 'active' : 'processing'}`}
                 style={{
-                  height: `${Math.max(25, height * 100)}%`,
+                  height: `${Math.min(100, Math.max(20, height * 100))}%`,
                 }}
               />
             ))}
@@ -99,8 +156,8 @@ export const DictationBar: FC<DictationBarProps> = ({
         )}
 
         {/* Status text */}
-        <span className="status-text">
-          {isRecording ? 'Listening...' : isProcessing ? 'Processing...' : 'Ready'}
+        <span className={`status-text ${error ? 'error' : ''}`}>
+          {error ? 'Error!' : statusOverride ? statusOverride : isRecording ? 'Listening...' : isProcessing ? 'Processing...' : 'Ready'}
         </span>
       </div>
     </div>

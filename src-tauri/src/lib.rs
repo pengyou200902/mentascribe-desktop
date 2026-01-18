@@ -4,29 +4,62 @@ mod hotkey;
 mod injection;
 mod settings;
 mod api;
+mod text;
 
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     pub is_recording: Mutex<bool>,
     pub settings: Mutex<settings::UserSettings>,
+    pub audio_level_emitter_running: Arc<AtomicBool>,
 }
 
 #[tauri::command]
-fn start_recording(state: tauri::State<'_, AppState>) -> Result<(), String> {
+fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    eprintln!("[recording] start_recording called");
+
     let mut is_recording = state.is_recording.lock().map_err(|e| e.to_string())?;
     if *is_recording {
+        eprintln!("[recording] WARNING: already recording");
         return Err("Already recording".to_string());
     }
     *is_recording = true;
 
     // Start audio capture
-    audio::capture::start_capture().map_err(|e| e.to_string())?;
+    eprintln!("[recording] Starting audio capture...");
+    audio::capture::start_capture().map_err(|e| {
+        eprintln!("[recording] ERROR: Failed to start audio capture: {}", e);
+        e.to_string()
+    })?;
+    eprintln!("[recording] Audio capture started successfully");
+
+    // Start audio level emitter
+    let running = state.audio_level_emitter_running.clone();
+    running.store(true, Ordering::SeqCst);
+
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        let mut frame_count = 0u32;
+        while running.load(Ordering::SeqCst) {
+            let level = audio::capture::get_current_level();
+            app_clone.emit("audio-level", level).ok();
+
+            // Log every 40 frames (~1 second) to avoid spam
+            frame_count += 1;
+            if frame_count % 40 == 0 {
+                log::info!("Emitting audio level: {:.4}", level);
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        log::info!("Audio level emitter stopped");
+    });
 
     Ok(())
 }
@@ -36,10 +69,16 @@ async fn stop_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
+    eprintln!("[recording] stop_recording called");
+
+    // Stop audio level emitter first
+    state.audio_level_emitter_running.store(false, Ordering::SeqCst);
+
     // Get recording state and settings before any await
     let was_recording = {
         let mut is_recording = state.is_recording.lock().map_err(|e| e.to_string())?;
         if !*is_recording {
+            eprintln!("[recording] WARNING: not currently recording");
             return Err("Not recording".to_string());
         }
         *is_recording = false;
@@ -51,7 +90,17 @@ async fn stop_recording(
     }
 
     // Stop audio capture and get audio data
-    let audio_data = audio::capture::stop_capture().map_err(|e| e.to_string())?;
+    eprintln!("[recording] Stopping audio capture...");
+    let audio_data = audio::capture::stop_capture().map_err(|e| {
+        eprintln!("[recording] ERROR: Failed to stop audio capture: {}", e);
+        e.to_string()
+    })?;
+    eprintln!(
+        "[recording] Audio captured: {} samples at {}Hz ({:.2}s)",
+        audio_data.samples.len(),
+        audio_data.sample_rate,
+        audio_data.samples.len() as f32 / audio_data.sample_rate as f32
+    );
 
     // Emit processing event
     app.emit("transcription-processing", ()).ok();
@@ -63,9 +112,26 @@ async fn stop_recording(
     };
 
     // Transcribe audio
-    let text = transcription::whisper::transcribe(&audio_data, &settings)
+    eprintln!("[recording] Starting transcription...");
+    let raw_text = transcription::whisper::transcribe(&audio_data, &settings)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            eprintln!("[recording] ERROR: Transcription failed: {}", e);
+            e.to_string()
+        })?;
+    eprintln!(
+        "[recording] Transcription complete: '{}' ({} chars)",
+        if raw_text.len() > 100 {
+            format!("{}...", &raw_text[..100])
+        } else {
+            raw_text.clone()
+        },
+        raw_text.len()
+    );
+
+    // Apply auto-capitalize if enabled
+    let auto_capitalize = settings.output.auto_capitalize.unwrap_or(true);
+    let text = text::process_text(&raw_text, auto_capitalize);
 
     // Emit completion event
     app.emit("transcription-complete", &text).ok();
@@ -87,14 +153,28 @@ fn get_settings(state: tauri::State<'_, AppState>) -> Result<settings::UserSetti
 
 #[tauri::command]
 fn update_settings(
+    app: tauri::AppHandle,
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let old_hotkey = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        settings.hotkey.key.clone()
+    };
+
     let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
     *settings = new_settings.clone();
 
     // Persist settings
     settings::save_settings(&new_settings).map_err(|e| e.to_string())?;
+
+    // Re-register hotkey if it changed
+    if old_hotkey != new_settings.hotkey.key {
+        drop(settings); // Release lock before hotkey operations
+        hotkey::unregister_all(&app).map_err(|e| e.to_string())?;
+        hotkey::setup_hotkey(app, new_settings.hotkey.key.as_deref())
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }
@@ -169,9 +249,19 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            // Initialize global hotkey
+            // Initialize global hotkey from settings
             let app_handle = app.handle().clone();
-            hotkey::setup_hotkey(app_handle.clone())?;
+            let loaded_settings = settings::load_settings().unwrap_or_default();
+            let hotkey_key = loaded_settings.hotkey.key.as_deref();
+            hotkey::setup_hotkey(app_handle.clone(), hotkey_key)?;
+
+            // Check if any model is downloaded
+            let models = transcription::whisper::get_available_models();
+            let has_model = models.iter().any(|m| m.downloaded);
+            if !has_model {
+                log::info!("No Whisper model found, emitting no-model-downloaded event");
+                app_handle.emit("no-model-downloaded", ()).ok();
+            }
 
             // Position dictation window at bottom center, above the dock
             if let Some(window) = app.get_webview_window("dictation") {
@@ -237,6 +327,7 @@ pub fn run() {
         .manage(AppState {
             is_recording: Mutex::new(false),
             settings: Mutex::new(settings),
+            audio_level_emitter_running: Arc::new(AtomicBool::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,

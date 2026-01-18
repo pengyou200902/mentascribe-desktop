@@ -123,21 +123,20 @@ html, body, #root {
 .waveform {
   display: flex;
   align-items: center;
-  gap: 3px;
-  height: 24px;
+  gap: 2px;
+  height: 22px;
 }
 
 .waveform-bar {
   width: 3px;
-  min-height: 6px;
+  min-height: 4px;
   background: #6b7280;
-  border-radius: 2px;
-  transition: height 0.1s ease, background 0.2s ease;
+  border-radius: 1.5px;
+  /* No CSS transition - animation handled by JavaScript */
 }
 
 .waveform-bar.active {
   background: linear-gradient(to top, #3b82f6, #60a5fa);
-  animation: waveform-pulse 0.3s ease-in-out infinite alternate;
 }
 
 .waveform-bar.processing {

@@ -1,9 +1,27 @@
 use crate::audio::{capture::prepare_for_whisper, AudioData};
 use crate::settings::UserSettings;
+use once_cell::sync::Lazy;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use thiserror::Error;
+use whisper_rs::{WhisperContext, WhisperContextParameters};
 
 use super::ModelInfo;
+
+// Cache for the Whisper model context to avoid reloading on every transcription
+struct ModelCache {
+    context: Option<WhisperContext>,
+    model_size: String,
+    model_path: PathBuf,
+}
+
+static MODEL_CACHE: Lazy<Mutex<ModelCache>> = Lazy::new(|| {
+    Mutex::new(ModelCache {
+        context: None,
+        model_size: String::new(),
+        model_path: PathBuf::new(),
+    })
+});
 
 #[derive(Error, Debug)]
 pub enum WhisperError {
@@ -105,11 +123,16 @@ pub async fn download_model(size: &str) -> Result<(), WhisperError> {
 }
 
 pub async fn transcribe(audio: &AudioData, settings: &UserSettings) -> Result<String, WhisperError> {
-    let model_size = settings.transcription.model_size.as_deref().unwrap_or("base");
-    let model_path = get_model_path(model_size);
+    let model_size = settings
+        .transcription
+        .model_size
+        .as_deref()
+        .unwrap_or("base")
+        .to_string();
+    let model_path = get_model_path(&model_size);
 
     if !model_path.exists() {
-        return Err(WhisperError::ModelNotFound(model_size.to_string()));
+        return Err(WhisperError::ModelNotFound(model_size.clone()));
     }
 
     // Prepare audio for Whisper (16kHz mono)
@@ -118,9 +141,10 @@ pub async fn transcribe(audio: &AudioData, settings: &UserSettings) -> Result<St
     // Run transcription in blocking task to not block async runtime
     let path = model_path.clone();
     let language = settings.transcription.language.clone();
+    let size = model_size.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        run_whisper(&path, &samples, language.as_deref())
+        run_whisper(&path, &size, &samples, language.as_deref())
     })
     .await
     .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
@@ -130,16 +154,43 @@ pub async fn transcribe(audio: &AudioData, settings: &UserSettings) -> Result<St
 
 fn run_whisper(
     model_path: &PathBuf,
+    model_size: &str,
     samples: &[f32],
     language: Option<&str>,
 ) -> Result<String, WhisperError> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+    use whisper_rs::{FullParams, SamplingStrategy};
 
-    let ctx = WhisperContext::new_with_params(
-        model_path.to_str().unwrap(),
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+    // Get or create the cached context
+    let mut cache = MODEL_CACHE
+        .lock()
+        .map_err(|e| WhisperError::TranscriptionError(format!("Cache lock error: {}", e)))?;
+
+    // Check if we need to reload the model
+    if cache.context.is_none() || cache.model_size != model_size || cache.model_path != *model_path
+    {
+        log::info!(
+            "Loading Whisper model: {} from {:?}",
+            model_size,
+            model_path
+        );
+
+        let ctx = WhisperContext::new_with_params(
+            model_path.to_str().unwrap(),
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+
+        cache.context = Some(ctx);
+        cache.model_size = model_size.to_string();
+        cache.model_path = model_path.clone();
+
+        log::info!("Whisper model loaded and cached");
+    } else {
+        log::info!("Using cached Whisper model: {}", model_size);
+    }
+
+    // Use the cached context
+    let ctx = cache.context.as_ref().unwrap();
 
     let mut state = ctx
         .create_state()
@@ -168,13 +219,27 @@ fn run_whisper(
         .full_n_segments()
         .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
 
+    log::info!("Whisper found {} segments", num_segments);
+
     let mut text = String::new();
     for i in 0..num_segments {
         let segment = state
             .full_get_segment_text(i)
             .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+        log::debug!("Segment {}: '{}'", i, segment);
         text.push_str(&segment);
     }
 
-    Ok(text.trim().to_string())
+    let result = text.trim().to_string();
+    log::info!(
+        "Whisper transcription result: '{}' ({} chars)",
+        if result.len() > 100 {
+            format!("{}...", &result[..100])
+        } else {
+            result.clone()
+        },
+        result.len()
+    );
+
+    Ok(result)
 }

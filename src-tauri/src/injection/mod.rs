@@ -17,10 +17,40 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .as_deref()
         .unwrap_or("type");
 
-    match method {
+    eprintln!(
+        "[inject] inject_text called: method={}, text_len={}, text='{}'",
+        method,
+        text.len(),
+        if text.len() > 80 { &text[..80] } else { text }
+    );
+
+    // Skip empty or whitespace-only text
+    if text.trim().is_empty() {
+        eprintln!("[inject] Skipping empty text");
+        return Ok(());
+    }
+
+    // Skip [BLANK_AUDIO] which Whisper outputs when no speech detected
+    if text.contains("[BLANK_AUDIO]") || text.contains("[BLANK AUDIO]") {
+        eprintln!("[inject] Skipping BLANK_AUDIO marker");
+        return Ok(());
+    }
+
+    // Small delay to allow focus to return to the target application
+    // after the dictation window processes the recording
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    let result = match method {
         "paste" => inject_via_paste(text),
         _ => inject_via_typing(text),
+    };
+
+    match &result {
+        Ok(_) => eprintln!("[inject] Text injection succeeded"),
+        Err(e) => eprintln!("[inject] ERROR: Text injection failed: {}", e),
     }
+
+    result
 }
 
 /// Inject text by simulating keyboard input
@@ -38,55 +68,21 @@ fn inject_via_typing(text: &str) -> Result<(), InjectionError> {
     Ok(())
 }
 
-/// Inject text via clipboard paste
+/// Inject text via clipboard paste (cross-platform using arboard)
 fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
+    use arboard::Clipboard;
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-    // Copy text to clipboard using platform-specific method
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        let mut child = Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
+    // Copy text to clipboard using arboard (cross-platform)
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| InjectionError::Failed(format!("Failed to access clipboard: {}", e)))?;
 
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        }
-        child
-            .wait()
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-    }
+    clipboard
+        .set_text(text)
+        .map_err(|e| InjectionError::Failed(format!("Failed to set clipboard text: {}", e)))?;
 
-    #[cfg(target_os = "windows")]
-    {
-        // For Windows, we'll use the typing method as fallback
-        return inject_via_typing(text);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        let mut child = Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        }
-        child
-            .wait()
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-    }
+    // Small delay to ensure clipboard is ready
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Simulate Cmd+V / Ctrl+V
     let mut enigo = Enigo::new(&Settings::default())
