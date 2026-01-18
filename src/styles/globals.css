@@ -41,19 +41,19 @@ html, body, #root {
   margin: 0;
 }
 
-/* Floating dictation bar - Wispr Flow style */
+/* Floating dictation bar - minimal pill style */
 .dictation-bar {
   display: inline-flex;
   align-items: center;
-  padding: 8px 14px;
+  padding: 6px 10px;
   background: rgba(50, 50, 50, 0.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-radius: 22px;
+  border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.3),
-    0 1px 4px rgba(0, 0, 0, 0.15);
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.15);
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
@@ -61,78 +61,69 @@ html, body, #root {
   max-width: fit-content;
 }
 
-.drag-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  pointer-events: none;
-}
-
-/* Microphone icon */
-.mic-icon {
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.7);
-  transition: color 0.2s ease;
-}
-
-.dictation-bar:hover .mic-icon {
-  color: rgba(255, 255, 255, 0.9);
-}
-
 .dictation-bar:active {
   cursor: grabbing;
 }
 
-/* Recording indicator dot */
-.indicator-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.drag-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+/* Microphone icon - color changes based on state */
+.mic-icon {
   flex-shrink: 0;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, filter 0.2s ease;
 }
 
-.indicator-dot.idle {
-  background: #4b5563;
+.mic-icon.idle {
+  color: rgba(255, 255, 255, 0.6);
 }
 
-.indicator-dot.recording {
-  background: #ef4444;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
-  animation: pulse-dot 1.5s ease-in-out infinite;
+.mic-icon.recording {
+  color: #ef4444;
+  filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.6));
+  animation: pulse-mic 1.5s ease-in-out infinite;
 }
 
-.indicator-dot.processing {
-  background: #eab308;
-  box-shadow: 0 0 8px rgba(234, 179, 8, 0.4);
-  animation: pulse-dot 0.8s ease-in-out infinite;
+.mic-icon.processing {
+  color: #eab308;
+  filter: drop-shadow(0 0 4px rgba(234, 179, 8, 0.5));
+  animation: pulse-mic 0.8s ease-in-out infinite;
 }
 
-@keyframes pulse-dot {
+.mic-icon.error {
+  color: #ef4444;
+}
+
+@keyframes pulse-mic {
   0%, 100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
     opacity: 0.7;
-    transform: scale(1.1);
   }
 }
 
-/* Waveform visualization */
+.dictation-bar:hover .mic-icon.idle {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Waveform visualization - compact */
 .waveform {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 22px;
+  height: 16px;
 }
 
 .waveform-bar {
-  width: 3px;
-  min-height: 4px;
+  width: 2px;
+  min-height: 3px;
   background: #6b7280;
-  border-radius: 1.5px;
-  /* No CSS transition - animation handled by JavaScript */
+  border-radius: 1px;
 }
 
 .waveform-bar.active {
@@ -151,14 +142,6 @@ html, body, #root {
   to {
     opacity: 1;
   }
-}
-
-/* Status text */
-.status-text {
-  font-size: 13px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
-  white-space: nowrap;
 }
 
 /* Custom scrollbar for settings window */

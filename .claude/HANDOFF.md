@@ -74,6 +74,7 @@ F6 Release → hotkey/mod.rs emits event
 | 10 | Recording state stuck | Reset on capture failure | `lib.rs`, `capture.rs` |
 | 11 | AppleScript slow, enigo unreliable | Native APIs: CGEvent (macOS), SendInput (Win), XTest (Linux). 900ms→100ms | `injection/mod.rs`, `Cargo.toml` |
 | 12 | BLANK_AUDIO skipped entire text | Strip marker instead of skip | `injection/mod.rs` |
+| 13 | UI too large | Minimal redesign: mic icon only (color=state) + waveform when active. Window 120x40 | `DictationBar.tsx`, `globals.css`, `tauri.conf.json` |
 
 ---
 
