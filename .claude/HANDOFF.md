@@ -1,6 +1,6 @@
 # MentaScribe Desktop - AI Agent Handoff Document
 
-**Last Updated:** 2026-01-18 14:01:05 EST (Accessibility permissions check + frontend timing fix)
+**Last Updated:** 2026-01-18 14:14:24 EST (Default injection method changed to paste)
 **Status:** Implementation Complete - Bug Fixes Applied
 
 ---
@@ -208,6 +208,12 @@ once_cell = "1.19" # Lazy static for model cache
 - **Fix:** Added `check_accessibility_permissions()` function that uses AppleScript to check if we can interact with System Events. Returns proper error if denied.
 - **File:** `src-tauri/src/injection/mod.rs`
 
+**8. Default Injection Method Changed to Paste**
+- **Issue:** "type" method (keystroke simulation) was unreliable on macOS even with Accessibility permissions
+- **Fix:** Changed default injection method from "type" to "paste" (clipboard + Cmd/Ctrl+V)
+- **Additional:** Clipboard is now cleared after paste to avoid leaving transcribed text in clipboard
+- **Files:** `src-tauri/src/injection/mod.rs`, `src/components/Settings.tsx`
+
 ### Critical Requirements:
 
 **1. Whisper Model Required:**
@@ -258,7 +264,7 @@ Settings are stored at:
     "mode": "hold"  // or "toggle"
   },
   "output": {
-    "insert_method": "type",  // or "paste"
+    "insert_method": "paste",  // or "type" - paste is default, clears clipboard after
     "auto_capitalize": true
   }
 }

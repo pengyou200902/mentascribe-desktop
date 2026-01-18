@@ -183,14 +183,14 @@ export const Settings: FC<SettingsProps> = ({ onBack }) => {
           <div>
             <label className="block text-sm text-gray-400 mb-1">Insert Method</label>
             <select
-              value={settings.output.insert_method || 'type'}
+              value={settings.output.insert_method || 'paste'}
               onChange={(e) =>
                 handleChange('output', 'insert_method', e.target.value)
               }
               className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
             >
-              <option value="type">Type (simulate keystrokes)</option>
               <option value="paste">Paste (use clipboard)</option>
+              <option value="type">Type (simulate keystrokes)</option>
             </select>
           </div>
 

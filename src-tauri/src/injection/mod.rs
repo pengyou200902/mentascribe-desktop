@@ -47,7 +47,7 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .output
         .insert_method
         .as_deref()
-        .unwrap_or("type");
+        .unwrap_or("paste");
 
     eprintln!(
         "[inject] inject_text called: method={}, text_len={}, text='{}'",
@@ -151,6 +151,17 @@ fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
         enigo
             .key(Key::Control, Direction::Release)
             .map_err(|e| InjectionError::Failed(e.to_string()))?;
+    }
+
+    // Small delay to ensure paste completes before clearing clipboard
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Clear clipboard after paste to avoid leaving transcribed text in clipboard
+    if let Err(e) = clipboard.clear() {
+        eprintln!("[inject] Warning: Failed to clear clipboard: {}", e);
+        // Don't fail the operation if clipboard clear fails
+    } else {
+        eprintln!("[inject] Clipboard cleared after paste");
     }
 
     log::info!("Text injected via paste: {} chars", text.len());
