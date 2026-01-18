@@ -1,6 +1,6 @@
 # MentaScribe Desktop - AI Agent Handoff Document
 
-**Last Updated:** 2026-01-18 14:34:21 EST (AppleScript paste + state reset fixes)
+**Last Updated:** 2026-01-18 (Native platform APIs for text injection)
 **Status:** Implementation Complete - Bug Fixes Applied
 
 ---
@@ -226,6 +226,17 @@ once_cell = "1.19" # Lazy static for model cache
 - **Fix:** Reset `is_recording = false` if `start_capture()` fails
 - **Additional:** Added `reset_recording_state` command and `reset_state()` function in capture module for manual recovery from stuck states
 - **Files:** `src-tauri/src/lib.rs`, `src-tauri/src/audio/capture.rs`
+
+**11. Native Platform APIs for Text Injection**
+- **Issue:** AppleScript was slow and enigo unreliable across platforms
+- **Fix:** Replaced with native APIs:
+  - macOS: CGEventPost (CoreGraphics) - direct keyboard event injection
+  - Windows: SendInput (Win32 API) - native input simulation
+  - Linux: XTest (X11) - X11 test extension for key events
+- **Performance:** Reduced injection delay from 900ms to 100ms (9x faster)
+- **Accessibility:** macOS now uses `AXIsProcessTrusted()` for proper permission check
+- **Limitations:** Linux Wayland not supported (returns explicit error)
+- **Files:** `src-tauri/src/injection/mod.rs`, `src-tauri/Cargo.toml`
 
 ### Critical Requirements:
 

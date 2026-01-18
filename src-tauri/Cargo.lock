@@ -2982,6 +2982,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "cocoa",
+ "core-graphics 0.23.2",
  "cpal",
  "dirs",
  "enigo",

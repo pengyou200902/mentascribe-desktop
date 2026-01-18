@@ -5,41 +5,169 @@ use thiserror::Error;
 pub enum InjectionError {
     #[error("Text injection failed: {0}")]
     Failed(String),
-    #[error("Platform not supported")]
-    UnsupportedPlatform,
-    #[error("Accessibility permission required. Go to System Settings > Privacy & Security > Accessibility and enable MentaScribe")]
+    #[error("Accessibility permission required. Go to System Settings > Privacy & Security > Accessibility")]
     AccessibilityPermissionRequired,
+    #[error("X11 display not available. Wayland is not yet supported.")]
+    WaylandNotSupported,
 }
 
-/// Check if we have Accessibility permissions on macOS
+// ============================================================================
+// macOS Implementation (CGEventPost via CoreGraphics)
+// ============================================================================
 #[cfg(target_os = "macos")]
-fn check_accessibility_permissions() -> bool {
-    use std::process::Command;
+mod platform {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    // Use AppleScript to check if we're trusted
-    // AXIsProcessTrusted() would be better but requires linking to ApplicationServices
-    let output = Command::new("osascript")
-        .args(["-e", "tell application \"System Events\" to return (exists process \"Finder\")"])
-        .output();
+    const VK_COMMAND: CGKeyCode = 0x37;
+    const VK_ANSI_V: CGKeyCode = 0x09;
 
-    match output {
-        Ok(out) => {
-            // If we can query System Events, we likely have accessibility permissions
-            let success = out.status.success();
-            eprintln!("[inject] Accessibility check: {}", if success { "granted" } else { "denied" });
-            success
+    pub fn check_accessibility() -> bool {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
         }
-        Err(e) => {
-            eprintln!("[inject] Accessibility check failed: {}", e);
-            false
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    pub fn simulate_paste() -> Result<(), super::InjectionError> {
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| super::InjectionError::Failed("CGEventSource creation failed".into()))?;
+
+        // Cmd down
+        let cmd_down = CGEvent::new_keyboard_event(source.clone(), VK_COMMAND, true)
+            .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
+        cmd_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        cmd_down.post(CGEventTapLocation::HID);
+
+        // V down with Cmd modifier
+        let v_down = CGEvent::new_keyboard_event(source.clone(), VK_ANSI_V, true)
+            .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
+        v_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        v_down.post(CGEventTapLocation::HID);
+
+        // V up
+        let v_up = CGEvent::new_keyboard_event(source.clone(), VK_ANSI_V, false)
+            .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
+        v_up.set_flags(CGEventFlags::CGEventFlagCommand);
+        v_up.post(CGEventTapLocation::HID);
+
+        // Cmd up
+        let cmd_up = CGEvent::new_keyboard_event(source, VK_COMMAND, false)
+            .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
+        cmd_up.post(CGEventTapLocation::HID);
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Windows Implementation (SendInput via Win32 API)
+// ============================================================================
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::mem::size_of;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY, VK_CONTROL, VK_V,
+    };
+
+    pub fn check_accessibility() -> bool {
+        true // No special permissions on Windows
+    }
+
+    pub fn simulate_paste() -> Result<(), super::InjectionError> {
+        let inputs: [INPUT; 4] = [
+            make_key_input(VK_CONTROL, false), // Ctrl down
+            make_key_input(VK_V, false),       // V down
+            make_key_input(VK_V, true),        // V up
+            make_key_input(VK_CONTROL, true),  // Ctrl up
+        ];
+
+        let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+        if sent != 4 {
+            return Err(super::InjectionError::Failed(format!(
+                "SendInput: {} of 4 events sent",
+                sent
+            )));
+        }
+        Ok(())
+    }
+
+    fn make_key_input(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: if key_up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS(0)
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
         }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn check_accessibility_permissions() -> bool {
-    true // No special permissions needed on other platforms
+// ============================================================================
+// Linux Implementation (XTest via X11)
+// ============================================================================
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::ptr::null;
+    use x11::xlib::{XCloseDisplay, XFlush, XKeysymToKeycode, XOpenDisplay};
+    use x11::xtest::XTestFakeKeyEvent;
+
+    const XK_Control_L: u64 = 0xFFE3;
+    const XK_v: u64 = 0x0076;
+
+    pub fn check_accessibility() -> bool {
+        !is_wayland()
+    }
+
+    fn is_wayland() -> bool {
+        std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v == "wayland")
+            .unwrap_or(false)
+            || std::env::var("WAYLAND_DISPLAY").is_ok()
+    }
+
+    pub fn simulate_paste() -> Result<(), super::InjectionError> {
+        if is_wayland() {
+            return Err(super::InjectionError::WaylandNotSupported);
+        }
+
+        unsafe {
+            let display = XOpenDisplay(null());
+            if display.is_null() {
+                return Err(super::InjectionError::Failed(
+                    "Failed to open X display".into(),
+                ));
+            }
+
+            let ctrl = XKeysymToKeycode(display, XK_Control_L);
+            let v = XKeysymToKeycode(display, XK_v);
+
+            XTestFakeKeyEvent(display, ctrl as u32, 1, 0); // Ctrl down
+            XTestFakeKeyEvent(display, v as u32, 1, 0); // V down
+            XTestFakeKeyEvent(display, v as u32, 0, 0); // V up
+            XTestFakeKeyEvent(display, ctrl as u32, 0, 0); // Ctrl up
+
+            XFlush(display);
+            XCloseDisplay(display);
+        }
+        Ok(())
+    }
 }
+
+// ============================================================================
+// Main API
+// ============================================================================
 
 /// Inject text into the currently focused application
 pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionError> {
@@ -49,12 +177,7 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .as_deref()
         .unwrap_or("paste");
 
-    eprintln!(
-        "[inject] inject_text called: method={}, text_len={}, text='{}'",
-        method,
-        text.len(),
-        if text.len() > 80 { &text[..80] } else { text }
-    );
+    eprintln!("[inject] method={}, len={}", method, text.len());
 
     // Skip empty or whitespace-only text
     if text.trim().is_empty() {
@@ -68,17 +191,22 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         return Ok(());
     }
 
-    // Check accessibility permissions before attempting injection
-    #[cfg(target_os = "macos")]
-    if !check_accessibility_permissions() {
-        eprintln!("[inject] ERROR: Accessibility permissions not granted");
-        return Err(InjectionError::AccessibilityPermissionRequired);
+    // Check accessibility permissions
+    if !platform::check_accessibility() {
+        #[cfg(target_os = "macos")]
+        {
+            eprintln!("[inject] ERROR: Accessibility permissions not granted");
+            return Err(InjectionError::AccessibilityPermissionRequired);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            eprintln!("[inject] ERROR: Wayland not supported");
+            return Err(InjectionError::WaylandNotSupported);
+        }
     }
 
-    // Delay to allow focus to return to the target application
-    // after the dictation window processes the recording
-    eprintln!("[inject] Waiting for focus to return to target application...");
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Minimal focus delay (reduced from 300ms to 50ms)
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
     let result = match method {
         "paste" => inject_via_paste(text),
@@ -93,88 +221,41 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
     result
 }
 
-/// Inject text by simulating keyboard input
+/// Inject text via clipboard paste using native platform APIs
+fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
+    use arboard::Clipboard;
+
+    let mut clipboard =
+        Clipboard::new().map_err(|e| InjectionError::Failed(format!("Clipboard: {}", e)))?;
+
+    clipboard
+        .set_text(text)
+        .map_err(|e| InjectionError::Failed(format!("Set text: {}", e)))?;
+
+    // Simulate paste using native platform API (no delay needed - clipboard is synchronous)
+    platform::simulate_paste()?;
+
+    // Brief delay before clearing (reduced from 500ms to 50ms)
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    clipboard.clear().ok();
+    eprintln!("[inject] Clipboard cleared");
+
+    log::info!("Text injected via paste: {} chars", text.len());
+    Ok(())
+}
+
+/// Inject text by simulating keyboard input (fallback method)
 fn inject_via_typing(text: &str) -> Result<(), InjectionError> {
     use enigo::{Enigo, Keyboard, Settings};
 
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| InjectionError::Failed(e.to_string()))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| InjectionError::Failed(e.to_string()))?;
 
     enigo
         .text(text)
         .map_err(|e| InjectionError::Failed(e.to_string()))?;
 
     log::info!("Text injected via typing: {} chars", text.len());
-    Ok(())
-}
-
-/// Inject text via clipboard paste (cross-platform using arboard)
-fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
-    use arboard::Clipboard;
-
-    // Copy text to clipboard using arboard (cross-platform)
-    let mut clipboard = Clipboard::new()
-        .map_err(|e| InjectionError::Failed(format!("Failed to access clipboard: {}", e)))?;
-
-    eprintln!("[inject] Setting clipboard text...");
-    clipboard
-        .set_text(text)
-        .map_err(|e| InjectionError::Failed(format!("Failed to set clipboard text: {}", e)))?;
-    eprintln!("[inject] Clipboard text set successfully");
-
-    // Delay to ensure clipboard is ready
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    // Simulate Cmd+V / Ctrl+V
-    #[cfg(target_os = "macos")]
-    {
-        // Use AppleScript to send Cmd+V - works better with Apple apps like Notes
-        use std::process::Command;
-        eprintln!("[inject] Sending Cmd+V via AppleScript...");
-        let output = Command::new("osascript")
-            .args(["-e", "tell application \"System Events\" to keystroke \"v\" using command down"])
-            .output()
-            .map_err(|e| InjectionError::Failed(format!("Failed to run AppleScript: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[inject] AppleScript error: {}", stderr);
-            return Err(InjectionError::Failed(format!("AppleScript failed: {}", stderr)));
-        }
-        eprintln!("[inject] Cmd+V sent via AppleScript");
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-        let mut enigo = Enigo::new(&Settings::default())
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-
-        eprintln!("[inject] Sending Ctrl+V...");
-        enigo
-            .key(Key::Control, Direction::Press)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        enigo
-            .key(Key::Unicode('v'), Direction::Click)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        enigo
-            .key(Key::Control, Direction::Release)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        eprintln!("[inject] Ctrl+V sent");
-    }
-
-    // Longer delay to ensure paste completes before clearing clipboard
-    // The target application needs time to process the paste command
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // Clear clipboard after paste to avoid leaving transcribed text in clipboard
-    if let Err(e) = clipboard.clear() {
-        eprintln!("[inject] Warning: Failed to clear clipboard: {}", e);
-        // Don't fail the operation if clipboard clear fails
-    } else {
-        eprintln!("[inject] Clipboard cleared after paste");
-    }
-
-    log::info!("Text injected via paste: {} chars", text.len());
     Ok(())
 }
