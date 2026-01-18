@@ -33,10 +33,12 @@ fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
 
     // Start audio capture
     eprintln!("[recording] Starting audio capture...");
-    audio::capture::start_capture().map_err(|e| {
+    if let Err(e) = audio::capture::start_capture() {
         eprintln!("[recording] ERROR: Failed to start audio capture: {}", e);
-        e.to_string()
-    })?;
+        // Reset state on failure
+        *is_recording = false;
+        return Err(e.to_string());
+    }
     eprintln!("[recording] Audio capture started successfully");
 
     // Start audio level emitter
@@ -143,6 +145,25 @@ async fn stop_recording(
 fn inject_text(text: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     injection::inject_text(&text, &settings).map_err(|e| e.to_string())
+}
+
+/// Reset recording state - used to recover from stuck states
+#[tauri::command]
+fn reset_recording_state(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    eprintln!("[recording] reset_recording_state called");
+
+    // Reset backend recording flag
+    let mut is_recording = state.is_recording.lock().map_err(|e| e.to_string())?;
+    *is_recording = false;
+
+    // Stop audio level emitter
+    state.audio_level_emitter_running.store(false, Ordering::SeqCst);
+
+    // Reset audio capture state
+    audio::capture::reset_state();
+
+    eprintln!("[recording] Recording state reset complete");
+    Ok(())
 }
 
 #[tauri::command]
@@ -333,6 +354,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             inject_text,
+            reset_recording_state,
             get_settings,
             update_settings,
             login,

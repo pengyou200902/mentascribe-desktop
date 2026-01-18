@@ -55,6 +55,21 @@ pub fn get_current_level() -> f32 {
     *CURRENT_AUDIO_LEVEL.lock().unwrap()
 }
 
+/// Reset all capture state - used to recover from stuck states
+pub fn reset_state() {
+    eprintln!("[capture] Resetting all capture state...");
+    *IS_STOPPING.lock().unwrap() = false;
+    *AUDIO_THREAD.lock().unwrap() = None;
+    *CURRENT_AUDIO_LEVEL.lock().unwrap() = 0.0;
+    AUDIO_BUFFER.lock().unwrap().clear();
+    eprintln!("[capture] State reset complete");
+}
+
+/// Check if capture is currently active
+pub fn is_capturing() -> bool {
+    AUDIO_THREAD.lock().unwrap().is_some()
+}
+
 pub fn start_capture() -> Result<(), AudioError> {
     eprintln!("[capture] start_capture called");
 

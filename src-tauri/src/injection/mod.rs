@@ -75,9 +75,10 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         return Err(InjectionError::AccessibilityPermissionRequired);
     }
 
-    // Small delay to allow focus to return to the target application
+    // Delay to allow focus to return to the target application
     // after the dictation window processes the recording
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    eprintln!("[inject] Waiting for focus to return to target application...");
+    std::thread::sleep(std::time::Duration::from_millis(300));
 
     let result = match method {
         "paste" => inject_via_paste(text),
@@ -110,38 +111,46 @@ fn inject_via_typing(text: &str) -> Result<(), InjectionError> {
 /// Inject text via clipboard paste (cross-platform using arboard)
 fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
     use arboard::Clipboard;
-    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
     // Copy text to clipboard using arboard (cross-platform)
     let mut clipboard = Clipboard::new()
         .map_err(|e| InjectionError::Failed(format!("Failed to access clipboard: {}", e)))?;
 
+    eprintln!("[inject] Setting clipboard text...");
     clipboard
         .set_text(text)
         .map_err(|e| InjectionError::Failed(format!("Failed to set clipboard text: {}", e)))?;
+    eprintln!("[inject] Clipboard text set successfully");
 
-    // Small delay to ensure clipboard is ready
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Delay to ensure clipboard is ready
+    std::thread::sleep(std::time::Duration::from_millis(100));
 
     // Simulate Cmd+V / Ctrl+V
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| InjectionError::Failed(e.to_string()))?;
-
     #[cfg(target_os = "macos")]
     {
-        enigo
-            .key(Key::Meta, Direction::Press)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        enigo
-            .key(Key::Unicode('v'), Direction::Click)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
-        enigo
-            .key(Key::Meta, Direction::Release)
-            .map_err(|e| InjectionError::Failed(e.to_string()))?;
+        // Use AppleScript to send Cmd+V - works better with Apple apps like Notes
+        use std::process::Command;
+        eprintln!("[inject] Sending Cmd+V via AppleScript...");
+        let output = Command::new("osascript")
+            .args(["-e", "tell application \"System Events\" to keystroke \"v\" using command down"])
+            .output()
+            .map_err(|e| InjectionError::Failed(format!("Failed to run AppleScript: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[inject] AppleScript error: {}", stderr);
+            return Err(InjectionError::Failed(format!("AppleScript failed: {}", stderr)));
+        }
+        eprintln!("[inject] Cmd+V sent via AppleScript");
     }
 
     #[cfg(not(target_os = "macos"))]
     {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+        let mut enigo = Enigo::new(&Settings::default())
+            .map_err(|e| InjectionError::Failed(e.to_string()))?;
+
+        eprintln!("[inject] Sending Ctrl+V...");
         enigo
             .key(Key::Control, Direction::Press)
             .map_err(|e| InjectionError::Failed(e.to_string()))?;
@@ -151,10 +160,12 @@ fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
         enigo
             .key(Key::Control, Direction::Release)
             .map_err(|e| InjectionError::Failed(e.to_string()))?;
+        eprintln!("[inject] Ctrl+V sent");
     }
 
-    // Small delay to ensure paste completes before clearing clipboard
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Longer delay to ensure paste completes before clearing clipboard
+    // The target application needs time to process the paste command
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Clear clipboard after paste to avoid leaving transcribed text in clipboard
     if let Err(e) = clipboard.clear() {

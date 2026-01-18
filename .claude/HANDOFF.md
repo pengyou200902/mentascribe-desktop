@@ -1,6 +1,6 @@
 # MentaScribe Desktop - AI Agent Handoff Document
 
-**Last Updated:** 2026-01-18 14:14:24 EST (Default injection method changed to paste)
+**Last Updated:** 2026-01-18 14:34:21 EST (AppleScript paste + state reset fixes)
 **Status:** Implementation Complete - Bug Fixes Applied
 
 ---
@@ -213,6 +213,19 @@ once_cell = "1.19" # Lazy static for model cache
 - **Fix:** Changed default injection method from "type" to "paste" (clipboard + Cmd/Ctrl+V)
 - **Additional:** Clipboard is now cleared after paste to avoid leaving transcribed text in clipboard
 - **Files:** `src-tauri/src/injection/mod.rs`, `src/components/Settings.tsx`
+
+**9. AppleScript for Paste on macOS**
+- **Issue:** enigo-based Cmd+V worked in VS Code but not in Apple Notes
+- **Cause:** Apple apps have stricter security and enigo's keystroke simulation wasn't compatible
+- **Fix:** Replaced enigo with AppleScript for sending Cmd+V on macOS: `tell application "System Events" to keystroke "v" using command down`
+- **Note:** Requires "System Events" permission in Accessibility settings (standard for automation apps)
+- **File:** `src-tauri/src/injection/mod.rs`
+
+**10. Recording State Stuck After Failure**
+- **Issue:** If `start_capture()` failed (e.g., permission dialog interrupted), `is_recording` stayed `true` and subsequent F6 presses showed "already recording"
+- **Fix:** Reset `is_recording = false` if `start_capture()` fails
+- **Additional:** Added `reset_recording_state` command and `reset_state()` function in capture module for manual recovery from stuck states
+- **Files:** `src-tauri/src/lib.rs`, `src-tauri/src/audio/capture.rs`
 
 ### Critical Requirements:
 
