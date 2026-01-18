@@ -179,17 +179,20 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
 
     eprintln!("[inject] method={}, len={}", method, text.len());
 
+    // Strip [BLANK_AUDIO] markers that Whisper outputs when no speech detected
+    let text = text
+        .replace("[BLANK_AUDIO]", "")
+        .replace("[BLANK AUDIO]", "");
+    let text = text.trim();
+
     // Skip empty or whitespace-only text
-    if text.trim().is_empty() {
-        eprintln!("[inject] Skipping empty text");
+    if text.is_empty() {
+        eprintln!("[inject] Skipping empty text (after stripping BLANK_AUDIO markers)");
         return Ok(());
     }
 
-    // Skip [BLANK_AUDIO] which Whisper outputs when no speech detected
-    if text.contains("[BLANK_AUDIO]") || text.contains("[BLANK AUDIO]") {
-        eprintln!("[inject] Skipping BLANK_AUDIO marker");
-        return Ok(());
-    }
+    eprintln!("[inject] Text after cleanup: '{}' ({} chars)",
+        if text.len() > 50 { &text[..50] } else { text }, text.len());
 
     // Check accessibility permissions
     if !platform::check_accessibility() {
