@@ -1,4 +1,4 @@
-import { FC, useEffect, useState, useRef } from 'react';
+import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useStore } from '../lib/store';
 
@@ -16,7 +16,6 @@ export const DictationBar: FC<DictationBarProps> = ({
   audioLevel = 0,
   error = null,
 }) => {
-  const isDragging = useRef(false);
   const prevLevelsRef = useRef<number[]>(Array(12).fill(0.15));
   const audioLevelRef = useRef(audioLevel);
   const isProcessingRef = useRef(isProcessing);
@@ -24,6 +23,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   const lastUpdateRef = useRef(0);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(12).fill(0.15));
   const [isHovered, setIsHovered] = useState(false);
+  const widgetRef = useRef<HTMLDivElement>(null);
   const { settings } = useStore();
 
   // Get the configured hotkey for display
@@ -43,10 +43,69 @@ export const DictationBar: FC<DictationBarProps> = ({
     isProcessingRef.current = isProcessing;
   }, [isProcessing]);
 
-  // Continuously animate waveform when recording or processing
+  // Setup window-level mouse tracking for transparent windows
+  // Use multiple approaches to ensure hover works
   useEffect(() => {
-    if (!isRecording && !isProcessing) {
-      // Reset to flat line when not active
+    const window = getCurrentWindow();
+
+    // Method 1: Listen for window focus events (window must be focused for events)
+    const unlistenFocus = window.onFocusChanged(({ payload: focused }) => {
+      if (!focused) {
+        // When window loses focus, collapse after a short delay
+        setTimeout(() => {
+          setIsHovered(false);
+        }, 100);
+      }
+    });
+
+    // Method 2: Document-level mouse tracking (works when window has any focus)
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!widgetRef.current) return;
+
+      const rect = widgetRef.current.getBoundingClientRect();
+      const padding = 8;
+      const isInside =
+        e.clientX >= rect.left - padding &&
+        e.clientX <= rect.right + padding &&
+        e.clientY >= rect.top - padding &&
+        e.clientY <= rect.bottom + padding;
+
+      setIsHovered(isInside);
+    };
+
+    const handleMouseLeave = () => {
+      setIsHovered(false);
+    };
+
+    // Method 3: Window-level mouse enter detection
+    const handleWindowMouseEnter = () => {
+      setIsHovered(true);
+    };
+
+    // Add all event listeners
+    document.addEventListener('mousemove', handleMouseMove, { passive: true });
+    document.addEventListener('mouseleave', handleMouseLeave);
+
+    // Use mouseenter on window element as backup
+    const rootEl = document.getElementById('root');
+    if (rootEl) {
+      rootEl.addEventListener('mouseenter', handleWindowMouseEnter);
+    }
+
+    return () => {
+      unlistenFocus.then(fn => fn());
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseleave', handleMouseLeave);
+      if (rootEl) {
+        rootEl.removeEventListener('mouseenter', handleWindowMouseEnter);
+      }
+    };
+  }, []);
+
+  // Animate waveform only when recording (not during processing/transcription)
+  useEffect(() => {
+    // When processing (transcribing), show flat zero-level waveform
+    if (isProcessing && !isRecording) {
       setWaveformBars(Array(12).fill(0.15));
       prevLevelsRef.current = Array(12).fill(0.15);
       targetHeightsRef.current = Array(12).fill(0.15);
@@ -54,7 +113,16 @@ export const DictationBar: FC<DictationBarProps> = ({
       return;
     }
 
-    // Immediately set bars to visible random heights when starting
+    // When not recording, reset to flat
+    if (!isRecording) {
+      setWaveformBars(Array(12).fill(0.15));
+      prevLevelsRef.current = Array(12).fill(0.15);
+      targetHeightsRef.current = Array(12).fill(0.15);
+      lastUpdateRef.current = 0;
+      return;
+    }
+
+    // Recording: animate based on audio level
     const initialHeights = Array(12).fill(0).map(() => 0.4 + Math.random() * 0.3);
     prevLevelsRef.current = initialHeights;
     targetHeightsRef.current = initialHeights;
@@ -71,9 +139,6 @@ export const DictationBar: FC<DictationBarProps> = ({
         lastUpdateRef.current = now;
 
         targetHeightsRef.current = targetHeightsRef.current.map(() => {
-          if (isProcessingRef.current) {
-            return 0.35 + Math.random() * 0.4;
-          }
           const baseHeight = 0.3 + Math.random() * 0.4;
           const audioBoost = level * (0.3 + Math.random() * 0.5);
           return Math.min(1.0, baseHeight + audioBoost);
@@ -99,17 +164,14 @@ export const DictationBar: FC<DictationBarProps> = ({
     };
   }, [isRecording, isProcessing]);
 
-  const handleMouseDown = async (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+  // Direct hover handlers as additional fallback
+  const handlePointerEnter = useCallback(() => {
+    setIsHovered(true);
+  }, []);
 
-    isDragging.current = true;
-    try {
-      await getCurrentWindow().startDragging();
-    } catch (err) {
-      console.error('Failed to start dragging:', err);
-    }
-    isDragging.current = false;
-  };
+  const handlePointerLeave = useCallback(() => {
+    setIsHovered(false);
+  }, []);
 
   // Get status text
   const getStatusText = () => {
@@ -123,11 +185,16 @@ export const DictationBar: FC<DictationBarProps> = ({
 
   return (
     <div
+      ref={widgetRef}
       className={`dictation-widget ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''}`}
-      onMouseDown={handleMouseDown}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      onMouseEnter={handlePointerEnter}
+      onMouseLeave={handlePointerLeave}
     >
+      {/* Invisible hit area for better mouse detection */}
+      <div className="widget-hitarea" />
+
       {/* Collapsed state: minimal pill handle */}
       <div className="widget-collapsed">
         <div className="pill-indicator">
@@ -161,9 +228,8 @@ export const DictationBar: FC<DictationBarProps> = ({
                 className={`waveform-dot ${isActive ? 'active' : 'idle'}`}
                 style={{
                   height: isActive
-                    ? `${Math.min(100, Math.max(15, height * 100))}%`
-                    : '15%',
-                  animationDelay: `${i * 0.05}s`,
+                    ? `${Math.round(Math.min(24, Math.max(4, height * 24)))}px`
+                    : '4px',
                 }}
               />
             ))}

@@ -29,7 +29,8 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "shadow": false,
-        "backgroundColor": [0, 0, 0, 0]
+        "backgroundColor": [0, 0, 0, 0],
+        "acceptFirstMouse": true
       },
       {
         "label": "settings",

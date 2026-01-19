@@ -12,10 +12,44 @@ mod dictionary;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Apply macOS-specific window settings to keep the dictation window always on top,
+/// including over fullscreen applications.
+#[cfg(target_os = "macos")]
+fn enforce_always_on_top(window: &tauri::WebviewWindow) {
+    use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+    use cocoa::base::id;
+
+    // Use CGWindowLevel constants for maximum visibility
+    // kCGScreenSaverWindowLevel = 1000 - highest level that appears above fullscreen apps
+    const SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
+
+    window.with_webview(|webview| {
+        unsafe {
+            let ns_window: id = webview.ns_window() as id;
+            // Set window level to screen saver level to appear above fullscreen apps
+            ns_window.setLevel_(SCREEN_SAVER_WINDOW_LEVEL);
+
+            // Set collection behavior to allow the window to:
+            // - Join all spaces (visible on all desktops)
+            // - Stay stationary when switching spaces
+            // - Appear above fullscreen applications
+            let behavior = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
+            ns_window.setCollectionBehavior_(behavior);
+        }
+    }).ok();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enforce_always_on_top(_window: &tauri::WebviewWindow) {
+    // On non-macOS platforms, the alwaysOnTop config setting is sufficient
+}
 
 pub struct AppState {
     pub is_recording: Mutex<bool>,
@@ -302,6 +336,39 @@ fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
 }
 
+/// Constants for dictation window dimensions (logical pixels, as defined in tauri.conf.json)
+const DICTATION_WINDOW_WIDTH: f64 = 340.0;
+const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
+/// Offset from the bottom of the screen to position just above the macOS dock
+/// Wispr Flow uses approximately 20px offset for a snug fit above the dock
+const DOCK_OFFSET: f64 = 20.0;
+
+/// Calculate the centered position for the dictation window on a given monitor.
+/// Uses logical coordinates - Tauri's set_position(LogicalPosition) handles scale factor conversion.
+///
+/// The key insight is that:
+/// - Monitor.position() and Monitor.size() return PHYSICAL coordinates
+/// - We convert them to LOGICAL by dividing by scale_factor
+/// - Then we calculate centering in logical space
+/// - Finally we use LogicalPosition with set_position() and Tauri handles the rest
+fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> LogicalPosition<f64> {
+    let scale_factor = monitor.scale_factor();
+    let screen_pos = monitor.position();
+    let screen_size = monitor.size();
+
+    // Convert monitor's physical coordinates to logical coordinates
+    let logical_screen_x = screen_pos.x as f64 / scale_factor;
+    let logical_screen_y = screen_pos.y as f64 / scale_factor;
+    let logical_screen_width = screen_size.width as f64 / scale_factor;
+    let logical_screen_height = screen_size.height as f64 / scale_factor;
+
+    // Calculate centered position in logical coordinates
+    let x = logical_screen_x + (logical_screen_width - DICTATION_WINDOW_WIDTH) / 2.0;
+    let y = logical_screen_y + logical_screen_height - DICTATION_WINDOW_HEIGHT - DOCK_OFFSET;
+
+    LogicalPosition::new(x, y)
+}
+
 fn open_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
         window.show().ok();
@@ -345,6 +412,75 @@ fn open_dashboard_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Reposition dictation window to the monitor where the mouse currently is
+/// Returns true if window was moved to a different monitor
+#[tauri::command]
+fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app.get_webview_window("dictation")
+        .ok_or_else(|| "Dictation window not found".to_string())?;
+
+    // Skip if window is not visible
+    if !window.is_visible().unwrap_or(false) {
+        return Ok(false);
+    }
+
+    // Get current cursor position (returns physical coordinates)
+    let cursor_pos = window.cursor_position()
+        .map_err(|e| format!("Failed to get cursor position: {}", e))?;
+
+    // Find the monitor containing the cursor
+    let monitors = window.available_monitors()
+        .map_err(|e| format!("Failed to get monitors: {}", e))?;
+
+    let target_monitor = monitors.into_iter().find(|m| {
+        let pos = m.position();
+        let size = m.size();
+        let cursor_x = cursor_pos.x as i32;
+        let cursor_y = cursor_pos.y as i32;
+        cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
+        cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
+    });
+
+    let monitor = target_monitor
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "No monitor found".to_string())?;
+
+    let screen_pos = monitor.position();
+    let screen_size = monitor.size();
+
+    // Check if window center is on the same monitor as cursor
+    // Use physical coordinates for this check since monitor position/size are physical
+    let current_pos = window.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
+    let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
+    let window_center_x = current_pos.x + actual_window_size.width as i32 / 2;
+    let window_center_y = current_pos.y + actual_window_size.height as i32 / 2;
+
+    let window_on_same_monitor =
+        window_center_x >= screen_pos.x &&
+        window_center_x < screen_pos.x + screen_size.width as i32 &&
+        window_center_y >= screen_pos.y &&
+        window_center_y < screen_pos.y + screen_size.height as i32;
+
+    if !window_on_same_monitor {
+        // Calculate target position using LOGICAL coordinates
+        // This is the key fix: instead of manually calculating physical positions,
+        // we use LogicalPosition and let Tauri handle scale factor conversions
+        let target_pos = calculate_dictation_position(&monitor);
+
+        // Hide window, reposition, then show - this prevents the flicker
+        window.hide().ok();
+        window.set_position(target_pos)
+            .map_err(|e| format!("Failed to set position: {}", e))?;
+        window.show().ok();
+        // Re-apply always-on-top settings after show (macOS may reset them)
+        enforce_always_on_top(&window);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 fn toggle_dictation_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("dictation") {
         if window.is_visible().unwrap_or(false) {
@@ -372,17 +508,15 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 .or_else(|| window.primary_monitor().ok().flatten());
 
             if let Some(monitor) = monitor {
-                let screen_pos = monitor.position();
-                let screen_size = monitor.size();
-                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
-
-                let x = screen_pos.x + (screen_size.width as i32 - window_size.width as i32) / 2;
-                let y = screen_pos.y + screen_size.height as i32 - window_size.height as i32 - 80;
-
-                window.set_position(tauri::PhysicalPosition::new(x, y)).ok();
+                // Use LogicalPosition for proper centering on any monitor
+                // This handles scale factor differences automatically
+                let target_pos = calculate_dictation_position(&monitor);
+                window.set_position(target_pos).ok();
             }
 
             window.show().ok();
+            // Re-apply always-on-top settings after show (macOS may reset them)
+            enforce_always_on_top(&window);
         }
     }
 }
@@ -451,16 +585,13 @@ pub fn run() {
                     .or_else(|| window.primary_monitor().ok().flatten());
 
                 if let Some(monitor) = monitor {
-                    let screen_pos = monitor.position();
-                    let screen_size = monitor.size();
-                    let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
-
-                    // Center horizontally on the monitor, position 80px from bottom (above dock)
-                    let x = screen_pos.x + (screen_size.width as i32 - window_size.width as i32) / 2;
-                    let y = screen_pos.y + screen_size.height as i32 - window_size.height as i32 - 80;
-
-                    window.set_position(tauri::PhysicalPosition::new(x, y)).ok();
+                    // Use LogicalPosition for proper centering on any monitor
+                    // This handles scale factor differences automatically
+                    let target_pos = calculate_dictation_position(&monitor);
+                    window.set_position(target_pos).ok();
                     window.show().ok();
+                    // Apply macOS-specific always-on-top settings (window level + collection behavior)
+                    enforce_always_on_top(&window);
                 }
             }
 
@@ -543,6 +674,8 @@ pub fn run() {
             add_dictionary_entry,
             update_dictionary_entry,
             remove_dictionary_entry,
+            // Window positioning
+            reposition_to_mouse_monitor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

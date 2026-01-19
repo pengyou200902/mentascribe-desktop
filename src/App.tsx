@@ -143,6 +143,27 @@ function App() {
     loadSettings();
   }, [loadSettings]);
 
+  // Multi-monitor tracking: periodically check if mouse moved to different monitor
+  // Only for dictation window
+  useEffect(() => {
+    if (windowType !== 'dictation') return;
+
+    const checkMouseMonitor = async () => {
+      try {
+        await invoke('reposition_to_mouse_monitor');
+      } catch (err) {
+        // Silently ignore errors (window might not be visible, etc.)
+      }
+    };
+
+    // Check every 150ms for monitor changes (fast enough to feel responsive)
+    const intervalId = setInterval(checkMouseMonitor, 150);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [windowType]);
+
   // Set up event listeners (only once)
   useEffect(() => {
     const unlistenPressed = listen('hotkey-pressed', async () => {
