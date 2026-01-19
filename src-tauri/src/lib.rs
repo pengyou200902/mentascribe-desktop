@@ -5,6 +5,9 @@ mod injection;
 mod settings;
 mod api;
 mod text;
+mod stats;
+mod history;
+mod dictionary;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -133,7 +136,24 @@ async fn stop_recording(
 
     // Apply auto-capitalize if enabled
     let auto_capitalize = settings.output.auto_capitalize.unwrap_or(true);
-    let text = text::process_text(&raw_text, auto_capitalize);
+    let mut text = text::process_text(&raw_text, auto_capitalize);
+
+    // Apply dictionary replacements
+    if let Ok(replaced) = dictionary::apply_replacements(&text) {
+        text = replaced;
+    }
+
+    // Calculate stats for recording
+    let word_count = text.split_whitespace().count() as u32;
+    let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
+
+    // Record to local history and stats (fire and forget, don't fail transcription)
+    if let Err(e) = history::add_entry(&text, word_count, duration_ms) {
+        eprintln!("[recording] WARNING: Failed to save to history: {}", e);
+    }
+    if let Err(e) = stats::record_transcription(word_count, duration_ms) {
+        eprintln!("[recording] WARNING: Failed to record stats: {}", e);
+    }
 
     // Emit completion event
     app.emit("transcription-complete", &text).ok();
@@ -219,6 +239,69 @@ fn get_available_models() -> Vec<transcription::ModelInfo> {
     transcription::whisper::get_available_models()
 }
 
+// Stats commands
+#[tauri::command]
+fn get_stats() -> Result<stats::LocalStats, String> {
+    stats::get_stats().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn record_transcription_stats(word_count: u32, duration_ms: u32) -> Result<stats::LocalStats, String> {
+    stats::record_transcription(word_count, duration_ms).map_err(|e| e.to_string())
+}
+
+// History commands
+#[tauri::command]
+fn get_history(limit: Option<u32>, offset: Option<u32>) -> Result<Vec<history::TranscriptionEntry>, String> {
+    history::get_history(limit, offset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_history_entry(id: String) -> Result<Option<history::TranscriptionEntry>, String> {
+    history::get_entry(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_history_entry(id: String) -> Result<bool, String> {
+    history::delete_entry(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history() -> Result<(), String> {
+    history::clear_history().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_history_count() -> Result<usize, String> {
+    history::get_total_count().map_err(|e| e.to_string())
+}
+
+// Dictionary commands
+#[tauri::command]
+fn get_dictionary() -> Result<Vec<dictionary::DictionaryEntry>, String> {
+    dictionary::get_dictionary().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_dictionary_entry(phrase: String, replacement: String) -> Result<dictionary::DictionaryEntry, String> {
+    dictionary::add_entry(phrase, replacement).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_dictionary_entry(
+    id: String,
+    phrase: String,
+    replacement: String,
+    enabled: bool,
+) -> Result<dictionary::DictionaryEntry, String> {
+    dictionary::update_entry(id, phrase, replacement, enabled).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_dictionary_entry(id: String) -> Result<bool, String> {
+    dictionary::remove_entry(id).map_err(|e| e.to_string())
+}
+
 fn open_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
         window.show().ok();
@@ -241,6 +324,21 @@ fn open_history_window(app: &tauri::AppHandle) {
         WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
             .title("MentaScribe History")
             .inner_size(480.0, 500.0)
+            .resizable(true)
+            .build()
+            .ok();
+    }
+}
+
+fn open_dashboard_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("dashboard") {
+        window.show().ok();
+        window.set_focus().ok();
+    } else {
+        WebviewWindowBuilder::new(app, "dashboard", WebviewUrl::App("index.html#dashboard".into()))
+            .title("MentaScribe")
+            .inner_size(800.0, 600.0)
+            .min_inner_size(640.0, 480.0)
             .resizable(true)
             .build()
             .ok();
@@ -311,6 +409,7 @@ pub fn run() {
             }
 
             // Build tray menu
+            let dashboard_item = MenuItem::with_id(app, "dashboard", "Dashboard...", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let history_item = MenuItem::with_id(app, "history", "History...", true, None::<&str>)?;
             let toggle_item = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
@@ -318,7 +417,7 @@ pub fn run() {
 
             let menu = Menu::with_items(
                 app,
-                &[&settings_item, &history_item, &toggle_item, &quit_item],
+                &[&dashboard_item, &settings_item, &history_item, &toggle_item, &quit_item],
             )?;
 
             // Build tray icon
@@ -327,6 +426,9 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "dashboard" => {
+                        open_dashboard_window(app);
+                    }
                     "settings" => {
                         open_settings_window(app);
                     }
@@ -371,6 +473,20 @@ pub fn run() {
             login,
             download_model,
             get_available_models,
+            // Stats
+            get_stats,
+            record_transcription_stats,
+            // History
+            get_history,
+            get_history_entry,
+            delete_history_entry,
+            clear_history,
+            get_history_count,
+            // Dictionary
+            get_dictionary,
+            add_dictionary_entry,
+            update_dictionary_entry,
+            remove_dictionary_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

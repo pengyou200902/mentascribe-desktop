@@ -4,9 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { DictationBar } from './components/DictationBar';
 import { Settings } from './components/Settings';
 import { History } from './components/History';
+import { Dashboard } from './components/dashboard/Dashboard';
 import { useStore } from './lib/store';
 
-type WindowType = 'dictation' | 'settings' | 'history';
+type WindowType = 'dictation' | 'settings' | 'history' | 'dashboard';
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -57,6 +58,7 @@ function App() {
     const hash = window.location.hash.slice(1);
     if (hash === 'settings') return 'settings';
     if (hash === 'history') return 'history';
+    if (hash === 'dashboard' || hash.startsWith('dashboard')) return 'dashboard';
     return 'dictation';
   };
 
@@ -213,6 +215,10 @@ function App() {
   }, [startRecording, stopRecording]);
 
   // Render based on window type
+  if (windowType === 'dashboard') {
+    return <Dashboard />;
+  }
+
   if (windowType === 'settings') {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-4">

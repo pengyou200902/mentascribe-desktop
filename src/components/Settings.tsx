@@ -4,6 +4,7 @@ import { useStore, UserSettings } from '../lib/store';
 
 interface SettingsProps {
   onBack: () => void;
+  embedded?: boolean;
 }
 
 interface ModelInfo {
@@ -13,7 +14,7 @@ interface ModelInfo {
   downloaded: boolean;
 }
 
-export const Settings: FC<SettingsProps> = ({ onBack }) => {
+export const Settings: FC<SettingsProps> = ({ onBack, embedded = false }) => {
   const { settings, updateSettings } = useStore();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -64,15 +65,17 @@ export const Settings: FC<SettingsProps> = ({ onBack }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Settings</h2>
-        <button
-          onClick={onBack}
-          className="text-gray-400 hover:text-white px-3 py-1 rounded hover:bg-gray-700"
-        >
-          Close
-        </button>
-      </div>
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Settings</h2>
+          <button
+            onClick={onBack}
+            className="text-gray-400 hover:text-white px-3 py-1 rounded hover:bg-gray-700"
+          >
+            Close
+          </button>
+        </div>
+      )}
 
       {/* Transcription Settings */}
       <section className="bg-gray-800 rounded-lg p-4">

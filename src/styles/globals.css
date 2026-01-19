@@ -144,7 +144,7 @@ html, body, #root {
   }
 }
 
-/* Custom scrollbar for settings window */
+/* Custom scrollbar for dark windows */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -172,4 +172,95 @@ html, body, #root {
 /* Keyboard shortcuts */
 kbd {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+/* ============================================
+   DASHBOARD LIGHT THEME STYLES
+   ============================================ */
+
+.dashboard-layout {
+  color-scheme: light;
+  color: #1f2937;
+  background-color: #ffffff;
+}
+
+.dashboard-layout ::-webkit-scrollbar-track {
+  background: #f3f4f6;
+}
+
+.dashboard-layout ::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+}
+
+.dashboard-layout ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Settings component override for light mode */
+.settings-light-mode .space-y-6 > section {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+.settings-light-mode h3 {
+  color: #111827;
+}
+
+.settings-light-mode label {
+  color: #374151;
+}
+
+.settings-light-mode .text-gray-400 {
+  color: #6b7280;
+}
+
+.settings-light-mode select,
+.settings-light-mode input[type="text"],
+.settings-light-mode input[type="password"] {
+  background-color: #ffffff;
+  border-color: #e5e7eb;
+  color: #111827;
+}
+
+.settings-light-mode select:focus,
+.settings-light-mode input[type="text"]:focus,
+.settings-light-mode input[type="password"]:focus {
+  border-color: #9ca3af;
+  outline: none;
+  ring: 2px;
+  ring-color: rgba(17, 24, 39, 0.1);
+}
+
+.settings-light-mode .bg-gray-700 {
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+}
+
+.settings-light-mode .bg-gray-800 {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+}
+
+.settings-light-mode .text-green-500 {
+  color: #059669;
+}
+
+.settings-light-mode .text-yellow-500 {
+  color: #d97706;
+}
+
+.settings-light-mode .text-blue-500 {
+  color: #2563eb;
+}
+
+.settings-light-mode span:not([class]) {
+  color: #374151;
+}
+
+/* Line clamp utility */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

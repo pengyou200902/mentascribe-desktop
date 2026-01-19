@@ -41,6 +41,19 @@
         "visible": false,
         "decorations": true,
         "url": "index.html#settings"
+      },
+      {
+        "label": "dashboard",
+        "title": "MentaScribe",
+        "width": 800,
+        "height": 600,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false,
+        "decorations": true,
+        "url": "index.html#dashboard"
       }
     ],
     "macOSPrivateApi": true,
