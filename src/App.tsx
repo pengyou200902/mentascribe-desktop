@@ -117,10 +117,11 @@ function App() {
 
       // Check if it's a model not found error
       if (errorMessage.includes('Model not found')) {
-        setError('No speech model. Downloading...');
+        const modelSize = settingsRef.current?.transcription?.model_size || 'small';
+        setError(`No speech model. Downloading ${modelSize}...`);
         // Trigger model download
         try {
-          await invoke('download_model', { size: 'base' });
+          await invoke('download_model', { size: modelSize });
           setError(null);
         } catch (downloadErr) {
           setError('Please download a model in Settings');
@@ -182,15 +183,18 @@ function App() {
       setAudioLevel(event.payload);
     });
 
-    // Handle no model downloaded - auto-download base model on first run
-    const unlistenNoModel = listen('no-model-downloaded', async () => {
-      console.log('No model found, downloading base model...');
+    // Handle model needs download - auto-download on startup
+    const unlistenModelDownload = listen<string>('model-needs-download', async (event) => {
+      const modelSize = event.payload;
+      console.log(`Model '${modelSize}' not found, downloading...`);
       setIsDownloadingModel(true);
+      setError(`Downloading ${modelSize} speech model...`);
       try {
-        await invoke('download_model', { size: 'base' });
-        console.log('Base model downloaded successfully');
+        await invoke('download_model', { size: modelSize });
+        console.log(`Model '${modelSize}' downloaded successfully`);
+        setError(null);
       } catch (err) {
-        console.error('Failed to download base model:', err);
+        console.error(`Failed to download ${modelSize} model:`, err);
         setError('Failed to download speech model. Please download manually in Settings.');
         setTimeout(() => setError(null), 10000);
       } finally {
@@ -204,7 +208,7 @@ function App() {
       unlistenProcessing.then((f) => f());
       unlistenComplete.then((f) => f());
       unlistenAudioLevel.then((f) => f());
-      unlistenNoModel.then((f) => f());
+      unlistenModelDownload.then((f) => f());
     };
   }, [startRecording, stopRecording]);
 

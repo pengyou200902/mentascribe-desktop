@@ -127,7 +127,7 @@ pub async fn transcribe(audio: &AudioData, settings: &UserSettings) -> Result<St
         .transcription
         .model_size
         .as_deref()
-        .unwrap_or("base")
+        .unwrap_or("small")
         .to_string();
     let model_path = get_model_path(&model_size);
 

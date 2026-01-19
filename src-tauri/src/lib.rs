@@ -276,12 +276,23 @@ pub fn run() {
             let hotkey_key = loaded_settings.hotkey.key.as_deref();
             hotkey::setup_hotkey(app_handle.clone(), hotkey_key)?;
 
-            // Check if any model is downloaded
+            // Check if the configured model is downloaded
             let models = transcription::whisper::get_available_models();
-            let has_model = models.iter().any(|m| m.downloaded);
-            if !has_model {
-                log::info!("No Whisper model found, emitting no-model-downloaded event");
-                app_handle.emit("no-model-downloaded", ()).ok();
+            let configured_model = loaded_settings
+                .transcription
+                .model_size
+                .as_deref()
+                .unwrap_or("small");
+
+            let model_downloaded = models
+                .iter()
+                .find(|m| m.id == configured_model)
+                .map(|m| m.downloaded)
+                .unwrap_or(false);
+
+            if !model_downloaded {
+                log::info!("Configured model '{}' not found, emitting model-needs-download event", configured_model);
+                app_handle.emit("model-needs-download", configured_model).ok();
             }
 
             // Position dictation window at bottom center, above the dock
