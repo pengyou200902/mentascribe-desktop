@@ -1,6 +1,5 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useStore } from '../lib/store';
 
 interface DictationBarProps {
   isRecording: boolean;
@@ -16,22 +15,15 @@ export const DictationBar: FC<DictationBarProps> = ({
   audioLevel = 0,
   error = null,
 }) => {
-  const prevLevelsRef = useRef<number[]>(Array(12).fill(0.15));
   const audioLevelRef = useRef(audioLevel);
-  const isProcessingRef = useRef(isProcessing);
-  const targetHeightsRef = useRef<number[]>(Array(12).fill(0.15));
-  const lastUpdateRef = useRef(0);
-  const [waveformBars, setWaveformBars] = useState<number[]>(Array(12).fill(0.15));
+  const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
   const [isHovered, setIsHovered] = useState(false);
   const widgetRef = useRef<HTMLDivElement>(null);
-  const { settings } = useStore();
+  const prevLevelsRef = useRef<number[]>(Array(9).fill(0.3));
+  const targetHeightsRef = useRef<number[]>(Array(9).fill(0.3));
+  const lastUpdateRef = useRef(0);
 
-  // Get the configured hotkey for display
-  const hotkeyDisplay = settings?.hotkey?.key || 'F6';
-  const hotkeyMode = settings?.hotkey?.mode || 'hold';
-
-  // Determine if we should show expanded state
-  const isExpanded = isHovered || isRecording || isProcessing;
+  // Determine state
   const isActive = isRecording || isProcessing;
 
   // Keep refs in sync
@@ -39,29 +31,18 @@ export const DictationBar: FC<DictationBarProps> = ({
     audioLevelRef.current = audioLevel;
   }, [audioLevel]);
 
-  useEffect(() => {
-    isProcessingRef.current = isProcessing;
-  }, [isProcessing]);
-
   // Setup window-level mouse tracking for transparent windows
-  // Use multiple approaches to ensure hover works
   useEffect(() => {
     const window = getCurrentWindow();
 
-    // Method 1: Listen for window focus events (window must be focused for events)
     const unlistenFocus = window.onFocusChanged(({ payload: focused }) => {
       if (!focused) {
-        // When window loses focus, collapse after a short delay
-        setTimeout(() => {
-          setIsHovered(false);
-        }, 100);
+        setTimeout(() => setIsHovered(false), 100);
       }
     });
 
-    // Method 2: Document-level mouse tracking (works when window has any focus)
     const handleMouseMove = (e: MouseEvent) => {
       if (!widgetRef.current) return;
-
       const rect = widgetRef.current.getBoundingClientRect();
       const padding = 8;
       const isInside =
@@ -69,24 +50,15 @@ export const DictationBar: FC<DictationBarProps> = ({
         e.clientX <= rect.right + padding &&
         e.clientY >= rect.top - padding &&
         e.clientY <= rect.bottom + padding;
-
       setIsHovered(isInside);
     };
 
-    const handleMouseLeave = () => {
-      setIsHovered(false);
-    };
+    const handleMouseLeave = () => setIsHovered(false);
+    const handleWindowMouseEnter = () => setIsHovered(true);
 
-    // Method 3: Window-level mouse enter detection
-    const handleWindowMouseEnter = () => {
-      setIsHovered(true);
-    };
-
-    // Add all event listeners
     document.addEventListener('mousemove', handleMouseMove, { passive: true });
     document.addEventListener('mouseleave', handleMouseLeave);
 
-    // Use mouseenter on window element as backup
     const rootEl = document.getElementById('root');
     if (rootEl) {
       rootEl.addEventListener('mouseenter', handleWindowMouseEnter);
@@ -102,28 +74,18 @@ export const DictationBar: FC<DictationBarProps> = ({
     };
   }, []);
 
-  // Animate waveform only when recording (not during processing/transcription)
+  // Animate waveform only when recording
   useEffect(() => {
-    // When processing (transcribing), show flat zero-level waveform
-    if (isProcessing && !isRecording) {
-      setWaveformBars(Array(12).fill(0.15));
-      prevLevelsRef.current = Array(12).fill(0.15);
-      targetHeightsRef.current = Array(12).fill(0.15);
-      lastUpdateRef.current = 0;
-      return;
-    }
-
-    // When not recording, reset to flat
     if (!isRecording) {
-      setWaveformBars(Array(12).fill(0.15));
-      prevLevelsRef.current = Array(12).fill(0.15);
-      targetHeightsRef.current = Array(12).fill(0.15);
+      setWaveformBars(Array(9).fill(0.3));
+      prevLevelsRef.current = Array(9).fill(0.3);
+      targetHeightsRef.current = Array(9).fill(0.3);
       lastUpdateRef.current = 0;
       return;
     }
 
     // Recording: animate based on audio level
-    const initialHeights = Array(12).fill(0).map(() => 0.4 + Math.random() * 0.3);
+    const initialHeights = Array(9).fill(0).map(() => 0.3 + Math.random() * 0.4);
     prevLevelsRef.current = initialHeights;
     targetHeightsRef.current = initialHeights;
     setWaveformBars(initialHeights);
@@ -133,21 +95,22 @@ export const DictationBar: FC<DictationBarProps> = ({
     const animate = () => {
       const level = audioLevelRef.current;
       const now = Date.now();
-      const updateInterval = 40;
+      const updateInterval = 50;
 
       if (now - lastUpdateRef.current > updateInterval) {
         lastUpdateRef.current = now;
-
-        targetHeightsRef.current = targetHeightsRef.current.map(() => {
-          const baseHeight = 0.3 + Math.random() * 0.4;
-          const audioBoost = level * (0.3 + Math.random() * 0.5);
+        targetHeightsRef.current = targetHeightsRef.current.map((_, i) => {
+          // Create a wave-like pattern with center bars taller
+          const centerFactor = 1 - Math.abs(i - 4) / 5;
+          const baseHeight = 0.25 + centerFactor * 0.3 + Math.random() * 0.2;
+          const audioBoost = level * (0.4 + Math.random() * 0.4);
           return Math.min(1.0, baseHeight + audioBoost);
         });
       }
 
       const newBars = prevLevelsRef.current.map((prevHeight, i) => {
         const target = targetHeightsRef.current[i];
-        const smoothing = 0.4;
+        const smoothing = 0.35;
         return prevHeight + (target - prevHeight) * smoothing;
       });
 
@@ -162,79 +125,66 @@ export const DictationBar: FC<DictationBarProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [isRecording, isProcessing]);
+  }, [isRecording]);
 
-  // Direct hover handlers as additional fallback
-  const handlePointerEnter = useCallback(() => {
-    setIsHovered(true);
-  }, []);
+  const handlePointerEnter = useCallback(() => setIsHovered(true), []);
+  const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
-  const handlePointerLeave = useCallback(() => {
-    setIsHovered(false);
-  }, []);
+  // Render idle state - simple horizontal dash
+  const renderIdle = () => (
+    <div className="wispr-idle">
+      <div className="wispr-dash" />
+    </div>
+  );
 
-  // Get status text
-  const getStatusText = () => {
-    if (error) return error;
-    if (isProcessing) return 'Transcribing...';
-    if (isRecording) return 'Listening...';
-    return null;
-  };
+  // Render recording state - vertical waveform bars
+  const renderRecording = () => (
+    <div className="wispr-waveform">
+      {waveformBars.map((height, i) => (
+        <div
+          key={i}
+          className="wispr-bar"
+          style={{
+            height: `${Math.round(Math.max(4, height * 20))}px`,
+          }}
+        />
+      ))}
+    </div>
+  );
 
-  const statusText = getStatusText();
+  // Render processing state - dots with spinner
+  const renderProcessing = () => (
+    <div className="wispr-processing">
+      <div className="wispr-dots">
+        {Array(8).fill(0).map((_, i) => (
+          <div key={i} className="wispr-dot" style={{ animationDelay: `${i * 0.1}s` }} />
+        ))}
+      </div>
+      <div className="wispr-spinner" />
+    </div>
+  );
+
+  // Render error state
+  const renderError = () => (
+    <div className="wispr-error">
+      <span className="wispr-error-text">{error}</span>
+    </div>
+  );
 
   return (
     <div
       ref={widgetRef}
-      className={`dictation-widget ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''}`}
+      className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''}`}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
       onMouseEnter={handlePointerEnter}
       onMouseLeave={handlePointerLeave}
     >
-      {/* Invisible hit area for better mouse detection */}
-      <div className="widget-hitarea" />
-
-      {/* Collapsed state: minimal pill handle */}
-      <div className="widget-collapsed">
-        <div className="pill-indicator">
-          <div className={`pill-dot ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`} />
-        </div>
-      </div>
-
-      {/* Expanded state: instruction + waveform */}
-      <div className="widget-expanded">
-        {/* Instruction text or status */}
-        <div className="instruction-row">
-          {statusText ? (
-            <span className={`status-text ${error ? 'error' : isRecording ? 'recording' : 'processing'}`}>
-              {statusText}
-            </span>
-          ) : (
-            <span className="instruction-text">
-              {hotkeyMode === 'toggle' ? 'Press' : 'Click or hold'}{' '}
-              <kbd className="hotkey-badge">{hotkeyDisplay}</kbd>
-              {' '}to start dictating
-            </span>
-          )}
-        </div>
-
-        {/* Waveform visualization */}
-        <div className="waveform-row">
-          <div className="waveform-container">
-            {waveformBars.map((height, i) => (
-              <div
-                key={i}
-                className={`waveform-dot ${isActive ? 'active' : 'idle'}`}
-                style={{
-                  height: isActive
-                    ? `${Math.round(Math.min(24, Math.max(4, height * 24)))}px`
-                    : '4px',
-                }}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="wispr-content">
+        {error ? renderError() :
+         isProcessing ? renderProcessing() :
+         isRecording ? renderRecording() :
+         renderIdle()}
       </div>
     </div>
   );

@@ -36,7 +36,7 @@ html, body, #root {
 }
 
 /* ============================================
-   DICTATION WIDGET STYLES (Overlay Window)
+   DICTATION WIDGET STYLES (Wispr Flow-inspired)
    ============================================ */
 
 .dictation-container {
@@ -52,245 +52,143 @@ html, body, #root {
   margin: 0;
 }
 
-/* Main widget wrapper */
-.dictation-widget {
-  position: relative;
+/* ---- Wispr-style Pill ---- */
+.wispr-pill {
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
+  min-width: 90px;
+  height: 36px;
+  padding: 0 16px;
+  background: rgba(20, 20, 20, 0.95);
+  border-radius: 20px;
   cursor: default;
   user-select: none;
   -webkit-user-select: none;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Invisible hit area to ensure mouse events are captured on transparent windows */
-.widget-hitarea {
-  position: absolute;
-  inset: -12px;
-  background: transparent;
-  pointer-events: auto;
-  z-index: -1;
-}
-
-/* ---- Collapsed State (ultra-slim pill) ---- */
-.widget-collapsed {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 28px;
-  background: rgba(45, 45, 45, 0.95);
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.pill-indicator {
+.wispr-pill:hover {
+  background: rgba(30, 30, 30, 0.95);
+}
+
+.wispr-pill.active {
+  min-width: 100px;
+}
+
+.wispr-pill.has-error {
+  min-width: 120px;
+  background: rgba(30, 15, 15, 0.95);
+}
+
+.wispr-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 2.5px;
-  background: rgba(255, 255, 255, 0.28);
-  border-radius: 1.5px;
+  height: 100%;
+}
+
+/* ---- Idle State: Horizontal Dash ---- */
+.wispr-idle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wispr-dash {
+  width: 32px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 2px;
   transition: all 0.2s ease;
 }
 
-.pill-dot {
-  width: 0;
-  height: 0;
+.wispr-pill:hover .wispr-dash {
+  width: 36px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* ---- Recording State: Waveform Bars ---- */
+.wispr-waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.wispr-bar {
+  width: 3px;
+  min-height: 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 2px;
+  transition: height 0.06s ease-out;
+}
+
+/* ---- Processing State: Dots + Spinner ---- */
+.wispr-processing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.wispr-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wispr-dot {
+  width: 4px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.5);
   border-radius: 50%;
-  background: transparent;
-  transition: all 0.3s ease;
+  animation: wispr-dot-pulse 1.2s ease-in-out infinite;
 }
 
-.pill-dot.recording {
-  width: 5px;
-  height: 5px;
-  background: #f0972a;
-  box-shadow: 0 0 6px rgba(240, 151, 42, 0.6);
-  animation: pulse-glow 1.5s ease-in-out infinite;
-}
-
-.pill-dot.processing {
-  width: 5px;
-  height: 5px;
-  background: #f5b54f;
-  box-shadow: 0 0 5px rgba(245, 181, 79, 0.5);
-  animation: pulse-glow 0.8s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
+@keyframes wispr-dot-pulse {
   0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+  50% {
     opacity: 1;
     transform: scale(1);
   }
-  50% {
-    opacity: 0.6;
-    transform: scale(0.85);
+}
+
+.wispr-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  animation: wispr-spin 0.8s linear infinite;
+}
+
+@keyframes wispr-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
-/* ---- Expanded State ---- */
-.widget-expanded {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 24px 14px;
-  background: rgba(45, 45, 45, 0.95);
-  border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  opacity: 0;
-  transform: translateY(8px) scale(0.95);
-  pointer-events: none;
-  position: absolute;
-  bottom: 8px;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* State transitions */
-.dictation-widget.collapsed .widget-collapsed {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.dictation-widget.collapsed .widget-expanded {
-  opacity: 0;
-  transform: translateY(8px) scale(0.95);
-  pointer-events: none;
-}
-
-.dictation-widget.expanded .widget-collapsed {
-  opacity: 0;
-  transform: translateY(-8px) scale(0.95);
-  pointer-events: none;
-}
-
-.dictation-widget.expanded .widget-expanded {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  pointer-events: auto;
-}
-
-/* Instruction row */
-.instruction-row {
+/* ---- Error State ---- */
+.wispr-error {
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
 }
 
-.instruction-text {
+.wispr-error-text {
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 14px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.hotkey-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 8px;
-  margin: 0 2px;
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
   font-size: 12px;
-  font-weight: 600;
-  color: #f9a8d4;
-  background: rgba(249, 168, 212, 0.12);
-  border: 1px solid rgba(249, 168, 212, 0.25);
-  border-radius: 6px;
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-}
-
-.status-text {
-  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 14px;
   font-weight: 500;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.status-text.recording {
-  color: #f0972a;
-}
-
-.status-text.processing {
-  color: #f5b54f;
-  animation: text-pulse 1s ease-in-out infinite;
-}
-
-.status-text.error {
   color: #f87171;
-}
-
-@keyframes text-pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.65;
-  }
-}
-
-/* Waveform row */
-.waveform-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-
-.waveform-container {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 6px 16px;
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 12px;
-}
-
-.waveform-dot {
-  width: 3px;
-  border-radius: 2px;
-  transition: height 0.08s ease-out;
-  flex-shrink: 0;
-}
-
-.waveform-dot.idle {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-.waveform-dot.active {
-  background: linear-gradient(to top, #f0972a, #f5b54f);
-  box-shadow: 0 0 4px rgba(240, 151, 42, 0.3);
-}
-
-/* Active state enhancements */
-.dictation-widget.active .widget-expanded {
-  border-color: rgba(240, 151, 42, 0.2);
-}
-
-/* Error state */
-.dictation-widget.has-error .widget-expanded {
-  border-color: rgba(248, 113, 113, 0.3);
-}
-
-/* Hover effect on collapsed pill */
-.dictation-widget.collapsed:hover .widget-collapsed {
-  border-color: rgba(255, 255, 255, 0.12);
-}
-
-.dictation-widget.collapsed:hover .pill-indicator {
-  background: rgba(255, 255, 255, 0.35);
-  width: 30px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ============================================
