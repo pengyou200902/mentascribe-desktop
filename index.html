@@ -5,6 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MentaScribe</title>
+    <!-- Preload fonts for faster loading -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <style>
       html, body {
         background: transparent !important;
@@ -13,6 +16,15 @@
         padding: 0;
       }
     </style>
+    <!-- Prevent theme flash by setting class early -->
+    <script>
+      (function() {
+        const theme = localStorage.getItem('mentascribe-theme') || 'system';
+        const isDark = theme === 'dark' ||
+          (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.add(isDark ? 'dark' : 'light');
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

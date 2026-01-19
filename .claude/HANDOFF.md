@@ -1,7 +1,7 @@
 # MentaScribe Desktop - AI Agent Handoff Document
 
-**Last Updated:** 2026-01-18
-**Status:** Functional - All core features implemented
+**Last Updated:** 2026-01-19 01:51:37 EST
+**Status:** Functional - All core features implemented + Dashboard with theme support
 
 ---
 
@@ -35,6 +35,26 @@ F6 Release → hotkey/mod.rs emits event
 
 ---
 
+## Dashboard Window
+
+Accessible via system tray menu. Features:
+
+| Page | Description |
+|------|-------------|
+| **Home** | Usage stats (streak, total words, avg WPM), recent transcriptions |
+| **Dictionary** | Add/edit/delete custom phrases for transcription |
+| **History** | Full transcription history with copy/delete, pagination |
+| **Settings** | Theme selector, transcription options, hotkey config |
+
+### Theme System
+
+- **Modes:** Light / Dark / System (auto-detect)
+- **Persistence:** localStorage key `mentascribe-theme`
+- **Design:** "Sonic Warmth" - amber accents (#f0972a), DM Sans font, warm stone neutrals
+- **Flash prevention:** Inline script in `index.html` sets theme class before React loads
+
+---
+
 ## Key Files
 
 | File | Purpose |
@@ -47,6 +67,24 @@ F6 Release → hotkey/mod.rs emits event
 | `src-tauri/src/transcription/whisper.rs` | Whisper with model caching |
 | `src-tauri/src/injection/mod.rs` | Native text injection (CGEvent/SendInput/XTest) |
 | `src-tauri/src/text/mod.rs` | Auto-capitalize |
+
+### Dashboard Files
+
+| File | Purpose |
+|------|---------|
+| `src/components/dashboard/Dashboard.tsx` | Dashboard layout with ThemeProvider |
+| `src/components/dashboard/Sidebar.tsx` | Navigation with logo, waveform decoration |
+| `src/components/dashboard/HomePage.tsx` | Stats cards (streak, words, WPM), recent activity |
+| `src/components/dashboard/HistoryPage.tsx` | Full history timeline with copy/delete |
+| `src/components/dashboard/DictionaryPage.tsx` | Custom phrase management |
+| `src/components/dashboard/SettingsPage.tsx` | Theme selector + all app settings |
+| `src/lib/theme.tsx` | ThemeProvider (light/dark/system) |
+| `src/lib/historyStore.ts` | Zustand store for history |
+| `src/lib/dictionaryStore.ts` | Zustand store for dictionary |
+| `src/lib/statsStore.ts` | Zustand store for usage stats |
+| `src-tauri/src/history/mod.rs` | History CRUD backend |
+| `src-tauri/src/dictionary/mod.rs` | Dictionary CRUD backend |
+| `src-tauri/src/stats/mod.rs` | Stats tracking backend |
 
 ---
 
