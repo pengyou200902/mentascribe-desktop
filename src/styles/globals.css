@@ -68,32 +68,31 @@ html, body, #root {
   cursor: grabbing;
 }
 
-/* ---- Collapsed State (slim pill) ---- */
+/* ---- Collapsed State (ultra-slim pill like Wispr Flow) ---- */
 .widget-collapsed {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 40px;
-  background: rgba(40, 40, 40, 0.88);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px 28px;
+  background: rgba(55, 55, 55, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.25),
-    0 2px 4px rgba(0, 0, 0, 0.15),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .pill-indicator {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
+  width: 28px;
+  height: 2.5px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 1.5px;
   transition: all 0.2s ease;
 }
 
@@ -106,18 +105,18 @@ html, body, #root {
 }
 
 .pill-dot.recording {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   background: #f0972a;
-  box-shadow: 0 0 8px rgba(240, 151, 42, 0.6);
+  box-shadow: 0 0 6px rgba(240, 151, 42, 0.6);
   animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
 .pill-dot.processing {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   background: #f5b54f;
-  box-shadow: 0 0 6px rgba(245, 181, 79, 0.5);
+  box-shadow: 0 0 5px rgba(245, 181, 79, 0.5);
   animation: pulse-glow 0.8s ease-in-out infinite;
 }
 
@@ -298,12 +297,13 @@ html, body, #root {
 
 /* Hover effect on collapsed pill */
 .dictation-widget.collapsed:hover .widget-collapsed {
-  background: rgba(50, 50, 50, 0.92);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(60, 60, 60, 0.82);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .dictation-widget.collapsed:hover .pill-indicator {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.35);
+  width: 30px;
 }
 
 /* ============================================
