@@ -17,38 +17,97 @@ use tauri::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Apply macOS-specific window settings to keep the dictation window always on top,
-/// including over fullscreen applications.
+/// Convert the dictation window to an NSPanel for fullscreen overlay support on macOS.
+///
+/// IMPORTANT: Only NSPanel can appear above fullscreen applications on macOS.
+/// Regular NSWindow cannot do this regardless of window level settings.
+/// This is an Apple-enforced limitation since macOS Big Sur.
 #[cfg(target_os = "macos")]
-fn enforce_always_on_top(window: &tauri::WebviewWindow) {
-    use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
-    use cocoa::base::id;
+fn setup_dictation_panel(app: &tauri::AppHandle) {
+    // Use the cocoa types re-exported from tauri_nspanel to avoid version mismatch
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::WebviewWindowExt;
 
-    // Use CGWindowLevel constants for maximum visibility
-    // kCGScreenSaverWindowLevel = 1000 - highest level that appears above fullscreen apps
-    const SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
+    // Window level constants from NSWindow.h
+    // NSMainMenuWindowLevel = 24, we use NSMainMenuWindowLevel + 1 = 25
+    const OVERLAY_WINDOW_LEVEL: i32 = 25;
+    // NSNonactivatingPanelMask = 1 << 7 = 128 - makes panel not steal focus
+    const NS_NONACTIVATING_PANEL_MASK: i32 = 128;
 
-    window.with_webview(|webview| {
-        unsafe {
-            let ns_window: id = webview.ns_window() as id;
-            // Set window level to screen saver level to appear above fullscreen apps
-            ns_window.setLevel_(SCREEN_SAVER_WINDOW_LEVEL);
+    println!("[nspanel] setup_dictation_panel called");
 
-            // Set collection behavior to allow the window to:
-            // - Join all spaces (visible on all desktops)
-            // - Stay stationary when switching spaces
-            // - Appear above fullscreen applications
-            let behavior = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
-                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
-                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
-            ns_window.setCollectionBehavior_(behavior);
+    if let Some(window) = app.get_webview_window("dictation") {
+        println!("[nspanel] Found dictation window, converting to NSPanel...");
+
+        match window.to_panel() {
+            Ok(panel) => {
+                // Set panel level to above main menu for overlay visibility
+                panel.set_level(OVERLAY_WINDOW_LEVEL);
+                println!("[nspanel] Panel level set to: {}", OVERLAY_WINDOW_LEVEL);
+
+                // Set collection behavior for fullscreen overlay support:
+                // - CanJoinAllSpaces: visible on all desktops/spaces
+                // - Stationary: stays in place when switching spaces
+                // - FullScreenAuxiliary: can appear above fullscreen apps
+                // - IgnoresCycle: excluded from Cmd+Tab app switcher
+                let behavior = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
+                panel.set_collection_behaviour(behavior);
+                println!("[nspanel] Collection behavior set for fullscreen overlay");
+
+                // Make the panel non-activating so it doesn't steal focus
+                panel.set_style_mask(NS_NONACTIVATING_PANEL_MASK);
+                println!("[nspanel] Panel style mask set to non-activating");
+
+                // Additional panel settings for overlay behavior
+                panel.set_floating_panel(true);
+                panel.set_hides_on_deactivate(false);
+
+                log::info!("Dictation window successfully converted to NSPanel for fullscreen overlay support");
+            }
+            Err(e) => {
+                log::error!("Failed to convert dictation window to NSPanel: {:?}", e);
+                println!("[nspanel] ERROR: Failed to convert to panel: {:?}", e);
+            }
         }
-    }).ok();
+    } else {
+        println!("[nspanel] WARNING: dictation window not found");
+    }
+}
+
+/// Refresh the panel settings after showing the window.
+/// This ensures the panel maintains its fullscreen overlay capabilities.
+#[cfg(target_os = "macos")]
+fn refresh_panel_settings(app: &tauri::AppHandle) {
+    // Use the cocoa types re-exported from tauri_nspanel to avoid version mismatch
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::ManagerExt;
+
+    // Window level constants
+    const OVERLAY_WINDOW_LEVEL: i32 = 25;
+
+    if let Ok(panel) = app.get_webview_panel("dictation") {
+        // Re-apply the window level and collection behavior
+        panel.set_level(OVERLAY_WINDOW_LEVEL);
+
+        let behavior = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
+        panel.set_collection_behaviour(behavior);
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn enforce_always_on_top(_window: &tauri::WebviewWindow) {
+fn setup_dictation_panel(_app: &tauri::AppHandle) {
     // On non-macOS platforms, the alwaysOnTop config setting is sufficient
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_panel_settings(_app: &tauri::AppHandle) {
+    // On non-macOS platforms, no panel refresh needed
 }
 
 pub struct AppState {
@@ -473,8 +532,8 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         window.set_position(target_pos)
             .map_err(|e| format!("Failed to set position: {}", e))?;
         window.show().ok();
-        // Re-apply always-on-top settings after show (macOS may reset them)
-        enforce_always_on_top(&window);
+        // Re-apply panel settings after show (macOS may reset them)
+        refresh_panel_settings(&app);
         Ok(true)
     } else {
         Ok(false)
@@ -515,8 +574,8 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
             }
 
             window.show().ok();
-            // Re-apply always-on-top settings after show (macOS may reset them)
-            enforce_always_on_top(&window);
+            // Re-apply panel settings after show (macOS may reset them)
+            refresh_panel_settings(app);
         }
     }
 }
@@ -527,13 +586,20 @@ pub fn run() {
     // Load or create default settings
     let settings = settings::load_settings().unwrap_or_default();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .setup(|app| {
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    // Add NSPanel plugin on macOS for fullscreen overlay support
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder.setup(|app| {
             // Initialize global hotkey from settings
             let app_handle = app.handle().clone();
             let loaded_settings = settings::load_settings().unwrap_or_default();
@@ -590,10 +656,16 @@ pub fn run() {
                     let target_pos = calculate_dictation_position(&monitor);
                     window.set_position(target_pos).ok();
                     window.show().ok();
-                    // Apply macOS-specific always-on-top settings (window level + collection behavior)
-                    enforce_always_on_top(&window);
+                } else {
+                    println!("[window] setup: WARNING - no monitor found");
                 }
+            } else {
+                println!("[window] setup: WARNING - dictation window not found");
             }
+
+            // Convert dictation window to NSPanel on macOS for fullscreen overlay support
+            // This MUST be done after the window is shown and rendered
+            setup_dictation_panel(&app_handle);
 
             // Build tray menu
             let dashboard_item = MenuItem::with_id(app, "dashboard", "Dashboard...", true, None::<&str>)?;
