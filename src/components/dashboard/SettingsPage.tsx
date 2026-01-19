@@ -1,4 +1,4 @@
-import { FC, useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore, UserSettings } from '../../lib/store';
 import { useTheme } from '../../lib/theme';
@@ -64,6 +64,43 @@ const DownloadIcon = () => (
   </svg>
 );
 
+const ChevronDownIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+  </svg>
+);
+
+// Language flag/icon components
+const GlobeIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
+  </svg>
+);
+
+const HoldIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zM12 2.25V4.5m5.834.166l-1.591 1.591M20.25 10.5H18M7.757 14.743l-1.59 1.59M6 10.5H3.75m4.007-4.243l-1.59-1.59" />
+  </svg>
+);
+
+const ToggleIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9" />
+  </svg>
+);
+
+const ClipboardIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+  </svg>
+);
+
+const TypewriterIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+  </svg>
+);
+
 interface ModelInfo {
   id: string;
   name: string;
@@ -102,31 +139,306 @@ function SettingsSection({ icon, title, description, children }: SettingsSection
   );
 }
 
-// Select Component
-interface SelectProps {
+// Custom Dropdown Component
+interface DropdownOption {
+  value: string;
+  label: string;
+  icon?: React.ReactNode;
+  description?: string;
+}
+
+interface DropdownProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: DropdownOption[];
+  placeholder?: string;
+}
+
+function Dropdown({ label, value, onChange, options, placeholder }: DropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const selectedOption = options.find(opt => opt.value === value);
+
+  // Close on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Keyboard navigation
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      switch (event.key) {
+        case 'ArrowDown':
+          event.preventDefault();
+          setHighlightedIndex(prev => Math.min(prev + 1, options.length - 1));
+          break;
+        case 'ArrowUp':
+          event.preventDefault();
+          setHighlightedIndex(prev => Math.max(prev - 1, 0));
+          break;
+        case 'Enter':
+          event.preventDefault();
+          if (highlightedIndex >= 0) {
+            onChange(options[highlightedIndex].value);
+            setIsOpen(false);
+          }
+          break;
+        case 'Escape':
+          setIsOpen(false);
+          break;
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, highlightedIndex, options, onChange]);
+
+  // Scroll highlighted item into view
+  useEffect(() => {
+    if (isOpen && highlightedIndex >= 0 && listRef.current) {
+      const items = listRef.current.children;
+      if (items[highlightedIndex]) {
+        items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [highlightedIndex, isOpen]);
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+        {label}
+      </label>
+
+      {/* Trigger Button */}
+      <button
+        type="button"
+        onClick={() => {
+          setIsOpen(!isOpen);
+          setHighlightedIndex(options.findIndex(opt => opt.value === value));
+        }}
+        className={`
+          w-full flex items-center justify-between gap-3 px-4 py-3
+          bg-white dark:bg-stone-900
+          border-2 rounded-xl
+          transition-all duration-200 ease-out
+          ${isOpen
+            ? 'border-amber-500 dark:border-amber-400 ring-4 ring-amber-500/10 dark:ring-amber-400/10'
+            : 'border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
+          }
+        `}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          {selectedOption?.icon && (
+            <span className={`flex-shrink-0 ${isOpen ? 'text-amber-600 dark:text-amber-400' : 'text-stone-400 dark:text-stone-500'} transition-colors`}>
+              {selectedOption.icon}
+            </span>
+          )}
+          <div className="text-left min-w-0">
+            <span className={`block text-sm font-medium truncate ${selectedOption ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-500'}`}>
+              {selectedOption?.label || placeholder || 'Select...'}
+            </span>
+            {selectedOption?.description && (
+              <span className="block text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5">
+                {selectedOption.description}
+              </span>
+            )}
+          </div>
+        </div>
+        <ChevronDownIcon
+          className={`w-5 h-5 flex-shrink-0 text-stone-400 dark:text-stone-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {/* Dropdown Panel */}
+      {isOpen && (
+        <div
+          className="absolute z-50 w-full mt-2 py-2 bg-white dark:bg-stone-900 border-2 border-stone-200 dark:border-stone-700 rounded-xl shadow-xl shadow-stone-900/10 dark:shadow-black/30 overflow-hidden animate-dropdown-in"
+          style={{ maxHeight: '280px' }}
+        >
+          <div ref={listRef} className="overflow-y-auto max-h-64 scrollbar-thin">
+            {options.map((option, index) => {
+              const isSelected = option.value === value;
+              const isHighlighted = index === highlightedIndex;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  className={`
+                    w-full flex items-center gap-3 px-4 py-3 text-left
+                    transition-all duration-100
+                    ${isHighlighted ? 'bg-stone-100 dark:bg-stone-800' : ''}
+                    ${isSelected ? 'bg-amber-50 dark:bg-amber-900/20' : ''}
+                  `}
+                >
+                  {/* Icon or Selection Indicator */}
+                  <span className={`
+                    flex-shrink-0 w-5 h-5 flex items-center justify-center
+                    ${isSelected ? 'text-amber-600 dark:text-amber-400' : 'text-stone-400 dark:text-stone-500'}
+                  `}>
+                    {option.icon || (isSelected && <CheckIcon />)}
+                  </span>
+
+                  {/* Label & Description */}
+                  <div className="flex-1 min-w-0">
+                    <span className={`
+                      block text-sm font-medium truncate
+                      ${isSelected ? 'text-amber-700 dark:text-amber-400' : 'text-stone-900 dark:text-stone-100'}
+                    `}>
+                      {option.label}
+                    </span>
+                    {option.description && (
+                      <span className="block text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5">
+                        {option.description}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Selected Checkmark */}
+                  {isSelected && !option.icon && (
+                    <span className="flex-shrink-0 text-amber-500 dark:text-amber-400">
+                      <CheckIcon />
+                    </span>
+                  )}
+                  {isSelected && option.icon && (
+                    <span className="flex-shrink-0 w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Grid Select Component for Function Keys
+interface GridSelectProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: { value: string; label: string }[];
+  columns?: number;
 }
 
-function Select({ label, value, onChange, options }: SelectProps) {
+function GridSelect({ label, value, onChange, options, columns = 6 }: GridSelectProps) {
   return (
     <div>
-      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
         {label}
       </label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 dark:focus:border-amber-400 transition-all duration-200 cursor-pointer"
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        {options.map((option) => {
+          const isSelected = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onChange(option.value)}
+              className={`
+                relative px-3 py-2.5 rounded-xl text-sm font-semibold
+                transition-all duration-200 ease-out
+                ${isSelected
+                  ? 'bg-amber-500 dark:bg-amber-500 text-white shadow-lg shadow-amber-500/30 scale-105'
+                  : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 hover:scale-102'
+                }
+              `}
+            >
+              {option.label}
+              {isSelected && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-white dark:bg-stone-900 rounded-full flex items-center justify-center shadow-sm">
+                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Card Select Component for Mode Selection
+interface CardSelectProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string; icon: React.ReactNode; description: string }[];
+}
+
+function CardSelect({ label, value, onChange, options }: CardSelectProps) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
+        {label}
+      </label>
+      <div className="grid grid-cols-2 gap-3">
+        {options.map((option) => {
+          const isSelected = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onChange(option.value)}
+              className={`
+                relative flex flex-col items-start gap-2 p-4 rounded-xl text-left
+                border-2 transition-all duration-200 ease-out
+                ${isSelected
+                  ? 'border-amber-500 dark:border-amber-400 bg-amber-50 dark:bg-amber-900/20 shadow-lg shadow-amber-500/10'
+                  : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50 hover:border-stone-300 dark:hover:border-stone-600'
+                }
+              `}
+            >
+              {isSelected && (
+                <span className="absolute top-3 right-3 w-5 h-5 bg-amber-500 dark:bg-amber-400 rounded-full flex items-center justify-center text-white">
+                  <CheckIcon />
+                </span>
+              )}
+              <span className={`
+                p-2 rounded-lg
+                ${isSelected
+                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400'
+                  : 'bg-stone-100 dark:bg-stone-700/50 text-stone-500 dark:text-stone-400'
+                }
+              `}>
+                {option.icon}
+              </span>
+              <div>
+                <span className={`
+                  block text-sm font-semibold
+                  ${isSelected ? 'text-amber-700 dark:text-amber-400' : 'text-stone-900 dark:text-stone-100'}
+                `}>
+                  {option.label}
+                </span>
+                <span className="block text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                  {option.description}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -331,18 +643,22 @@ export function SettingsPage() {
             title="Transcription"
             description="Speech recognition settings"
           >
-            <Select
+            <Dropdown
               label="Language"
               value={settings.transcription.language || 'auto'}
               onChange={(value) => handleChange('transcription', 'language', value)}
               options={[
-                { value: 'auto', label: 'Auto-detect' },
-                { value: 'en', label: 'English' },
-                { value: 'es', label: 'Spanish' },
-                { value: 'fr', label: 'French' },
-                { value: 'de', label: 'German' },
-                { value: 'zh', label: 'Chinese' },
-                { value: 'ja', label: 'Japanese' },
+                { value: 'auto', label: 'Auto-detect', icon: <GlobeIcon />, description: 'Automatically detect language' },
+                { value: 'en', label: 'English', description: 'United States, UK, Australia' },
+                { value: 'es', label: 'Spanish', description: 'Spain, Latin America' },
+                { value: 'fr', label: 'French', description: 'France, Canada, Belgium' },
+                { value: 'de', label: 'German', description: 'Germany, Austria, Switzerland' },
+                { value: 'zh', label: 'Chinese', description: 'Simplified & Traditional' },
+                { value: 'ja', label: 'Japanese', description: 'Japan' },
+                { value: 'ko', label: 'Korean', description: 'South Korea' },
+                { value: 'pt', label: 'Portuguese', description: 'Portugal, Brazil' },
+                { value: 'it', label: 'Italian', description: 'Italy' },
+                { value: 'ru', label: 'Russian', description: 'Russia' },
               ]}
             />
 
@@ -415,7 +731,7 @@ export function SettingsPage() {
             title="Hotkey"
             description="Configure your activation shortcut"
           >
-            <Select
+            <GridSelect
               label="Activation Key"
               value={settings.hotkey.key || 'F6'}
               onChange={(value) => handleChange('hotkey', 'key', value)}
@@ -425,13 +741,13 @@ export function SettingsPage() {
               }))}
             />
 
-            <Select
-              label="Mode"
+            <CardSelect
+              label="Hotkey Mode"
               value={settings.hotkey.mode || 'hold'}
               onChange={(value) => handleChange('hotkey', 'mode', value)}
               options={[
-                { value: 'hold', label: 'Hold to talk' },
-                { value: 'toggle', label: 'Toggle on/off' },
+                { value: 'hold', label: 'Hold to Talk', icon: <HoldIcon />, description: 'Press and hold key while speaking' },
+                { value: 'toggle', label: 'Toggle On/Off', icon: <ToggleIcon />, description: 'Press once to start, again to stop' },
               ]}
             />
           </SettingsSection>
@@ -442,13 +758,13 @@ export function SettingsPage() {
             title="Output"
             description="How text is inserted"
           >
-            <Select
+            <CardSelect
               label="Insert Method"
               value={settings.output.insert_method || 'paste'}
               onChange={(value) => handleChange('output', 'insert_method', value)}
               options={[
-                { value: 'paste', label: 'Paste (use clipboard)' },
-                { value: 'type', label: 'Type (simulate keystrokes)' },
+                { value: 'paste', label: 'Paste', icon: <ClipboardIcon />, description: 'Copy to clipboard and paste (recommended)' },
+                { value: 'type', label: 'Type', icon: <TypewriterIcon />, description: 'Simulate individual keystrokes' },
               ]}
             />
 
@@ -475,15 +791,15 @@ export function SettingsPage() {
 
             {settings.cleanup.enabled && (
               <div className="space-y-4 pt-2 border-t border-stone-100 dark:border-stone-700 mt-4">
-                <Select
+                <Dropdown
                   label="Provider"
                   value={settings.cleanup.provider || 'openai'}
                   onChange={(value) => handleChange('cleanup', 'provider', value)}
                   options={[
-                    { value: 'openai', label: 'OpenAI' },
-                    { value: 'anthropic', label: 'Anthropic' },
-                    { value: 'openrouter', label: 'OpenRouter' },
-                    { value: 'ollama', label: 'Ollama (Local)' },
+                    { value: 'openai', label: 'OpenAI', description: 'GPT-4o, GPT-4o-mini' },
+                    { value: 'anthropic', label: 'Anthropic', description: 'Claude Sonnet, Haiku' },
+                    { value: 'openrouter', label: 'OpenRouter', description: 'Multiple providers' },
+                    { value: 'ollama', label: 'Ollama', description: 'Local models (free)' },
                   ]}
                 />
 
