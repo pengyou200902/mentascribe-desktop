@@ -350,6 +350,38 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
         if window.is_visible().unwrap_or(false) {
             window.hide().ok();
         } else {
+            // Reposition to the monitor where the mouse is before showing
+            let target_monitor = if let Ok(cursor_pos) = window.cursor_position() {
+                window.available_monitors().ok()
+                    .and_then(|monitors| {
+                        monitors.into_iter().find(|m| {
+                            let pos = m.position();
+                            let size = m.size();
+                            let cursor_x = cursor_pos.x as i32;
+                            let cursor_y = cursor_pos.y as i32;
+                            cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
+                            cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
+                        })
+                    })
+            } else {
+                None
+            };
+
+            let monitor = target_monitor
+                .or_else(|| window.current_monitor().ok().flatten())
+                .or_else(|| window.primary_monitor().ok().flatten());
+
+            if let Some(monitor) = monitor {
+                let screen_pos = monitor.position();
+                let screen_size = monitor.size();
+                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
+
+                let x = screen_pos.x + (screen_size.width as i32 - window_size.width as i32) / 2;
+                let y = screen_pos.y + screen_size.height as i32 - window_size.height as i32 - 80;
+
+                window.set_position(tauri::PhysicalPosition::new(x, y)).ok();
+            }
+
             window.show().ok();
         }
     }
@@ -393,15 +425,39 @@ pub fn run() {
                 app_handle.emit("model-needs-download", configured_model).ok();
             }
 
-            // Position dictation window at bottom center, above the dock
+            // Position dictation window at bottom center of the monitor where mouse is
             if let Some(window) = app.get_webview_window("dictation") {
-                if let Some(monitor) = window.current_monitor().ok().flatten() {
-                    let screen_size = monitor.size();
-                    let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(200, 48));
+                // Try to get cursor position and find the monitor containing it
+                let target_monitor = if let Ok(cursor_pos) = window.cursor_position() {
+                    // Find the monitor containing the cursor
+                    window.available_monitors().ok()
+                        .and_then(|monitors| {
+                            monitors.into_iter().find(|m| {
+                                let pos = m.position();
+                                let size = m.size();
+                                let cursor_x = cursor_pos.x as i32;
+                                let cursor_y = cursor_pos.y as i32;
+                                cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
+                                cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
+                            })
+                        })
+                } else {
+                    None
+                };
 
-                    // Center horizontally, position 100px from bottom (above dock)
-                    let x = (screen_size.width as i32 - window_size.width as i32) / 2;
-                    let y = screen_size.height as i32 - window_size.height as i32 - 100;
+                // Fall back to current/primary monitor if cursor detection fails
+                let monitor = target_monitor
+                    .or_else(|| window.current_monitor().ok().flatten())
+                    .or_else(|| window.primary_monitor().ok().flatten());
+
+                if let Some(monitor) = monitor {
+                    let screen_pos = monitor.position();
+                    let screen_size = monitor.size();
+                    let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
+
+                    // Center horizontally on the monitor, position 80px from bottom (above dock)
+                    let x = screen_pos.x + (screen_size.width as i32 - window_size.width as i32) / 2;
+                    let y = screen_pos.y + screen_size.height as i32 - window_size.height as i32 - 80;
 
                     window.set_position(tauri::PhysicalPosition::new(x, y)).ok();
                     window.show().ok();

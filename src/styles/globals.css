@@ -1,9 +1,9 @@
+/* Import DM Sans from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Import DM Sans from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ============================================
    BASE STYLES
@@ -36,7 +36,7 @@ html, body, #root {
 }
 
 /* ============================================
-   DICTATION BAR STYLES (Overlay Window)
+   DICTATION WIDGET STYLES (Overlay Window)
    ============================================ */
 
 .dictation-container {
@@ -46,110 +46,264 @@ html, body, #root {
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  padding: 0;
+  padding: 0 0 8px 0;
   margin: 0;
 }
 
-.dictation-bar {
-  display: inline-flex;
+/* Main widget wrapper */
+.dictation-widget {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  padding: 6px 10px;
-  background: rgba(50, 50, 50, 0.92);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.3),
-    0 1px 2px rgba(0, 0, 0, 0.15);
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
   -webkit-app-region: drag;
-  max-width: fit-content;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.dictation-bar:active {
+.dictation-widget:active {
   cursor: grabbing;
 }
 
-.drag-content {
+/* ---- Collapsed State (slim pill) ---- */
+.widget-collapsed {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  padding: 10px 40px;
+  background: rgba(40, 40, 40, 0.88);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.25),
+    0 2px 4px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.pill-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  transition: all 0.2s ease;
+}
+
+.pill-dot {
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: transparent;
+  transition: all 0.3s ease;
+}
+
+.pill-dot.recording {
+  width: 6px;
+  height: 6px;
+  background: #f0972a;
+  box-shadow: 0 0 8px rgba(240, 151, 42, 0.6);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.pill-dot.processing {
+  width: 6px;
+  height: 6px;
+  background: #f5b54f;
+  box-shadow: 0 0 6px rgba(245, 181, 79, 0.5);
+  animation: pulse-glow 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.85);
+  }
+}
+
+/* ---- Expanded State ---- */
+.widget-expanded {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 14px;
+  background: rgba(28, 28, 28, 0.92);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  opacity: 0;
+  transform: translateY(8px) scale(0.95);
+  pointer-events: none;
+  position: absolute;
+  bottom: 8px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* State transitions */
+.dictation-widget.collapsed .widget-collapsed {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.dictation-widget.collapsed .widget-expanded {
+  opacity: 0;
+  transform: translateY(8px) scale(0.95);
   pointer-events: none;
 }
 
-.mic-icon {
-  flex-shrink: 0;
-  transition: color 0.2s ease, filter 0.2s ease;
+.dictation-widget.expanded .widget-collapsed {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.95);
+  pointer-events: none;
 }
 
-.mic-icon.idle {
-  color: rgba(255, 255, 255, 0.6);
+.dictation-widget.expanded .widget-expanded {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
 }
 
-.mic-icon.recording {
+/* Instruction row */
+.instruction-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.instruction-text {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.hotkey-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  margin: 0 2px;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f9a8d4;
+  background: rgba(249, 168, 212, 0.12);
+  border: 1px solid rgba(249, 168, 212, 0.25);
+  border-radius: 6px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.status-text {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.status-text.recording {
   color: #f0972a;
-  filter: drop-shadow(0 0 6px rgba(240, 151, 42, 0.6));
-  animation: pulse-mic 1.5s ease-in-out infinite;
 }
 
-.mic-icon.processing {
+.status-text.processing {
   color: #f5b54f;
-  filter: drop-shadow(0 0 4px rgba(245, 181, 79, 0.5));
-  animation: pulse-mic 0.8s ease-in-out infinite;
+  animation: text-pulse 1s ease-in-out infinite;
 }
 
-.mic-icon.error {
-  color: #ef4444;
+.status-text.error {
+  color: #f87171;
 }
 
-@keyframes pulse-mic {
+@keyframes text-pulse {
   0%, 100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.7;
+    opacity: 0.65;
   }
 }
 
-.dictation-bar:hover .mic-icon.idle {
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.waveform {
+/* Waveform row */
+.waveform-row {
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 16px;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.waveform-bar {
-  width: 2px;
+.waveform-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 20px;
+  padding: 6px 16px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 12px;
+}
+
+.waveform-dot {
+  width: 3px;
   min-height: 3px;
-  background: #6b7280;
-  border-radius: 1px;
+  border-radius: 2px;
+  transition: height 0.1s ease-out, background 0.2s ease;
 }
 
-.waveform-bar.active {
+.waveform-dot.idle {
+  background: rgba(255, 255, 255, 0.25);
+  height: 3px !important;
+}
+
+.waveform-dot.active {
   background: linear-gradient(to top, #f0972a, #f5b54f);
+  box-shadow: 0 0 4px rgba(240, 151, 42, 0.3);
 }
 
-.waveform-bar.processing {
-  background: linear-gradient(to top, #e17a1a, #f9d08a);
-  animation: waveform-pulse 0.5s ease-in-out infinite alternate;
+/* Active state enhancements */
+.dictation-widget.active .widget-expanded {
+  border-color: rgba(240, 151, 42, 0.25);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    0 0 24px rgba(240, 151, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-@keyframes waveform-pulse {
-  from {
-    opacity: 0.7;
-  }
-  to {
-    opacity: 1;
-  }
+/* Error state */
+.dictation-widget.has-error .widget-expanded {
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+/* Hover effect on collapsed pill */
+.dictation-widget.collapsed:hover .widget-collapsed {
+  background: rgba(50, 50, 50, 0.92);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dictation-widget.collapsed:hover .pill-indicator {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 /* ============================================
