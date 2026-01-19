@@ -101,6 +101,24 @@ const TypewriterIcon = () => (
   </svg>
 );
 
+const RecordIcon = () => (
+  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8" />
+  </svg>
+);
+
+const StopIcon = () => (
+  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+
+const ClearIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+  </svg>
+);
+
 interface ModelInfo {
   id: string;
   name: string;
@@ -330,55 +348,6 @@ function Dropdown({ label, value, onChange, options, placeholder }: DropdownProp
   );
 }
 
-// Grid Select Component for Function Keys
-interface GridSelectProps {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: { value: string; label: string }[];
-  columns?: number;
-}
-
-function GridSelect({ label, value, onChange, options, columns = 6 }: GridSelectProps) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
-        {label}
-      </label>
-      <div
-        className="grid gap-2"
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-      >
-        {options.map((option) => {
-          const isSelected = option.value === value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => onChange(option.value)}
-              className={`
-                relative px-3 py-2.5 rounded-xl text-sm font-semibold
-                transition-all duration-200 ease-out
-                ${isSelected
-                  ? 'bg-amber-500 dark:bg-amber-500 text-white shadow-lg shadow-amber-500/30 scale-105'
-                  : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 hover:scale-102'
-                }
-              `}
-            >
-              {option.label}
-              {isSelected && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-white dark:bg-stone-900 rounded-full flex items-center justify-center shadow-sm">
-                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // Card Select Component for Mode Selection
 interface CardSelectProps {
   label: string;
@@ -438,6 +407,386 @@ function CardSelect({ label, value, onChange, options }: CardSelectProps) {
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// Hotkey Recorder Component
+interface HotkeyRecorderProps {
+  value: string;
+  onChange: (value: string) => void;
+}
+
+interface ParsedHotkey {
+  modifiers: string[];
+  key: string | null;
+}
+
+function parseHotkey(hotkey: string): ParsedHotkey {
+  if (!hotkey) return { modifiers: [], key: null };
+
+  const parts = hotkey.split('+').map(p => p.trim());
+  const modifierNames = ['Ctrl', 'Alt', 'Shift', 'Meta', 'Cmd', 'Control', 'Option'];
+  const modifiers: string[] = [];
+  let key: string | null = null;
+
+  for (const part of parts) {
+    if (modifierNames.some(m => m.toLowerCase() === part.toLowerCase())) {
+      // Normalize modifier names
+      let normalizedMod = part;
+      if (part.toLowerCase() === 'control') normalizedMod = 'Ctrl';
+      if (part.toLowerCase() === 'option') normalizedMod = 'Alt';
+      if (part.toLowerCase() === 'cmd') normalizedMod = 'Meta';
+      modifiers.push(normalizedMod.charAt(0).toUpperCase() + normalizedMod.slice(1).toLowerCase());
+    } else {
+      key = part;
+    }
+  }
+
+  return { modifiers, key };
+}
+
+function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [currentModifiers, setCurrentModifiers] = useState<Set<string>>(new Set());
+  const [currentKey, setCurrentKey] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const parsed = parseHotkey(value);
+
+  // Get display name for a key
+  const getKeyDisplayName = (key: string): string => {
+    const keyMap: Record<string, string> = {
+      ' ': 'Space',
+      'ArrowUp': '↑',
+      'ArrowDown': '↓',
+      'ArrowLeft': '←',
+      'ArrowRight': '→',
+      'Escape': 'Esc',
+      'Delete': 'Del',
+      'Backspace': '⌫',
+      'Enter': '↵',
+      'Tab': '⇥',
+      'CapsLock': 'Caps',
+      'Control': 'Ctrl',
+      'Meta': '⌘',
+    };
+    return keyMap[key] || key;
+  };
+
+  // Get platform-specific modifier symbol
+  const getModifierSymbol = (modifier: string): { symbol: string; label: string } => {
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modifierMap: Record<string, { symbol: string; label: string }> = {
+      'Ctrl': { symbol: isMac ? '⌃' : 'Ctrl', label: 'Control' },
+      'Alt': { symbol: isMac ? '⌥' : 'Alt', label: isMac ? 'Option' : 'Alt' },
+      'Shift': { symbol: isMac ? '⇧' : 'Shift', label: 'Shift' },
+      'Meta': { symbol: isMac ? '⌘' : '⊞', label: isMac ? 'Command' : 'Windows' },
+    };
+    return modifierMap[modifier] || { symbol: modifier, label: modifier };
+  };
+
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const newModifiers = new Set<string>();
+      if (e.ctrlKey) newModifiers.add('Ctrl');
+      if (e.altKey) newModifiers.add('Alt');
+      if (e.shiftKey) newModifiers.add('Shift');
+      if (e.metaKey) newModifiers.add('Meta');
+
+      setCurrentModifiers(newModifiers);
+
+      // Check if this is a non-modifier key
+      const modifierKeys = ['Control', 'Alt', 'Shift', 'Meta'];
+      if (!modifierKeys.includes(e.key)) {
+        const keyName = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+        setCurrentKey(keyName);
+
+        // Build the final hotkey string
+        const modArray = Array.from(newModifiers);
+        const hotkeyString = [...modArray, keyName].join('+');
+
+        onChange(hotkeyString);
+        setIsRecording(false);
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 1500);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      e.preventDefault();
+
+      const newModifiers = new Set<string>();
+      if (e.ctrlKey) newModifiers.add('Ctrl');
+      if (e.altKey) newModifiers.add('Alt');
+      if (e.shiftKey) newModifiers.add('Shift');
+      if (e.metaKey) newModifiers.add('Meta');
+
+      setCurrentModifiers(newModifiers);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [isRecording, onChange]);
+
+  // Click outside to cancel recording
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsRecording(false);
+        setCurrentModifiers(new Set());
+        setCurrentKey(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isRecording]);
+
+  const startRecording = () => {
+    setIsRecording(true);
+    setCurrentModifiers(new Set());
+    setCurrentKey(null);
+  };
+
+  const stopRecording = () => {
+    setIsRecording(false);
+    setCurrentModifiers(new Set());
+    setCurrentKey(null);
+  };
+
+  const clearHotkey = () => {
+    onChange('');
+    setCurrentModifiers(new Set());
+    setCurrentKey(null);
+  };
+
+  // Render a single key cap
+  const KeyCap = ({ children, isModifier = false, isActive = false }: { children: React.ReactNode; isModifier?: boolean; isActive?: boolean }) => (
+    <span
+      className={`
+        inline-flex items-center justify-center
+        px-3 py-2 min-w-[2.5rem]
+        rounded-lg font-mono text-sm font-semibold
+        transition-all duration-150
+        ${isActive
+          ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/30 scale-105'
+          : isModifier
+            ? 'bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-300'
+            : 'bg-stone-100 dark:bg-stone-800 text-stone-900 dark:text-stone-100 border-2 border-stone-300 dark:border-stone-600'
+        }
+        ${isModifier ? 'text-xs' : 'text-sm'}
+      `}
+      style={{
+        boxShadow: isActive ? undefined : '0 2px 0 0 rgba(0,0,0,0.1)',
+      }}
+    >
+      {children}
+    </span>
+  );
+
+  // Display keys for current state or saved value
+  const displayModifiers = isRecording ? Array.from(currentModifiers) : parsed.modifiers;
+  const displayKey = isRecording ? currentKey : parsed.key;
+  const hasHotkey = displayModifiers.length > 0 || displayKey;
+
+  return (
+    <div ref={containerRef} className="space-y-4">
+      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300">
+        Activation Shortcut
+      </label>
+
+      {/* Main Hotkey Display */}
+      <div
+        className={`
+          relative overflow-hidden
+          rounded-2xl border-2 p-6
+          transition-all duration-300 ease-out
+          ${isRecording
+            ? 'border-amber-500 dark:border-amber-400 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20'
+            : showSuccess
+              ? 'border-green-500 dark:border-green-400 bg-green-50 dark:bg-green-900/20'
+              : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
+          }
+        `}
+      >
+        {/* Animated background when recording */}
+        {isRecording && (
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            <div className="absolute inset-0 bg-gradient-to-r from-amber-500/5 via-orange-500/10 to-amber-500/5 animate-shimmer" />
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 animate-pulse-bar" />
+          </div>
+        )}
+
+        {/* Success checkmark animation */}
+        {showSuccess && (
+          <div className="absolute top-3 right-3 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center animate-scale-in">
+            <CheckIcon />
+          </div>
+        )}
+
+        <div className="relative flex flex-col items-center gap-4">
+          {/* Status text */}
+          <div className="text-center">
+            {isRecording ? (
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-amber-700 dark:text-amber-400 animate-pulse">
+                  Press your desired key combination...
+                </p>
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  Use modifiers like Ctrl, Alt, Shift, or ⌘ with any key
+                </p>
+              </div>
+            ) : hasHotkey ? (
+              <p className="text-xs text-stone-500 dark:text-stone-400 mb-2">
+                Current shortcut
+              </p>
+            ) : (
+              <p className="text-sm text-stone-500 dark:text-stone-400">
+                No shortcut configured
+              </p>
+            )}
+          </div>
+
+          {/* Key display */}
+          {hasHotkey && (
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              {displayModifiers.map((mod) => {
+                const { symbol } = getModifierSymbol(mod);
+                return (
+                  <KeyCap key={mod} isModifier isActive={isRecording}>
+                    {symbol}
+                  </KeyCap>
+                );
+              })}
+              {displayModifiers.length > 0 && displayKey && (
+                <span className="text-stone-400 dark:text-stone-500 font-bold">+</span>
+              )}
+              {displayKey && (
+                <KeyCap isActive={isRecording}>
+                  {getKeyDisplayName(displayKey)}
+                </KeyCap>
+              )}
+            </div>
+          )}
+
+          {/* Placeholder keys when empty and not recording */}
+          {!hasHotkey && !isRecording && (
+            <div className="flex items-center gap-2 opacity-40">
+              <KeyCap isModifier>Ctrl</KeyCap>
+              <span className="text-stone-400 dark:text-stone-500 font-bold">+</span>
+              <KeyCap>?</KeyCap>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex gap-2">
+        {isRecording ? (
+          <button
+            type="button"
+            onClick={stopRecording}
+            className="
+              flex-1 flex items-center justify-center gap-2
+              px-4 py-3 rounded-xl
+              bg-stone-100 dark:bg-stone-800
+              text-stone-700 dark:text-stone-300
+              font-medium text-sm
+              hover:bg-stone-200 dark:hover:bg-stone-700
+              transition-colors duration-200
+            "
+          >
+            <StopIcon />
+            Cancel
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={startRecording}
+              className="
+                flex-1 flex items-center justify-center gap-2
+                px-4 py-3 rounded-xl
+                bg-amber-500 hover:bg-amber-600
+                text-white font-medium text-sm
+                shadow-lg shadow-amber-500/25
+                hover:shadow-amber-500/40
+                transition-all duration-200
+                hover:scale-[1.02] active:scale-[0.98]
+              "
+            >
+              <RecordIcon />
+              {hasHotkey ? 'Change Shortcut' : 'Record Shortcut'}
+            </button>
+            {hasHotkey && (
+              <button
+                type="button"
+                onClick={clearHotkey}
+                className="
+                  flex items-center justify-center
+                  px-4 py-3 rounded-xl
+                  bg-stone-100 dark:bg-stone-800
+                  text-stone-500 dark:text-stone-400
+                  hover:text-red-500 dark:hover:text-red-400
+                  hover:bg-red-50 dark:hover:bg-red-900/20
+                  transition-all duration-200
+                "
+                title="Clear shortcut"
+              >
+                <ClearIcon />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Quick presets */}
+      <div className="pt-2">
+        <p className="text-xs text-stone-500 dark:text-stone-400 mb-2">Quick presets</p>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { label: 'F6', value: 'F6' },
+            { label: 'F8', value: 'F8' },
+            { label: 'Ctrl+Space', value: 'Ctrl+Space' },
+            { label: 'Alt+S', value: 'Alt+S' },
+            { label: '⌘+Shift+V', value: 'Meta+Shift+V' },
+          ].map((preset) => (
+            <button
+              key={preset.value}
+              type="button"
+              onClick={() => {
+                onChange(preset.value);
+                setShowSuccess(true);
+                setTimeout(() => setShowSuccess(false), 1500);
+              }}
+              className={`
+                px-3 py-1.5 rounded-lg text-xs font-medium
+                transition-all duration-200
+                ${value === preset.value
+                  ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 ring-1 ring-amber-500/50'
+                  : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700'
+                }
+              `}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -731,25 +1080,22 @@ export function SettingsPage() {
             title="Hotkey"
             description="Configure your activation shortcut"
           >
-            <GridSelect
-              label="Activation Key"
+            <HotkeyRecorder
               value={settings.hotkey.key || 'F6'}
               onChange={(value) => handleChange('hotkey', 'key', value)}
-              options={['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'].map((key) => ({
-                value: key,
-                label: key,
-              }))}
             />
 
-            <CardSelect
-              label="Hotkey Mode"
-              value={settings.hotkey.mode || 'hold'}
-              onChange={(value) => handleChange('hotkey', 'mode', value)}
-              options={[
-                { value: 'hold', label: 'Hold to Talk', icon: <HoldIcon />, description: 'Press and hold key while speaking' },
-                { value: 'toggle', label: 'Toggle On/Off', icon: <ToggleIcon />, description: 'Press once to start, again to stop' },
-              ]}
-            />
+            <div className="pt-4 border-t border-stone-100 dark:border-stone-800">
+              <CardSelect
+                label="Activation Mode"
+                value={settings.hotkey.mode || 'hold'}
+                onChange={(value) => handleChange('hotkey', 'mode', value)}
+                options={[
+                  { value: 'hold', label: 'Hold to Talk', icon: <HoldIcon />, description: 'Press and hold key while speaking' },
+                  { value: 'toggle', label: 'Toggle On/Off', icon: <ToggleIcon />, description: 'Press once to start, again to stop' },
+                ]}
+              />
+            </div>
           </SettingsSection>
 
           {/* Output */}

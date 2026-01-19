@@ -511,3 +511,50 @@ kbd {
 .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: rgba(168, 162, 158, 0.4);
 }
+
+/* ============================================
+   HOTKEY RECORDER ANIMATIONS
+   ============================================ */
+
+.animate-shimmer {
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-pulse-bar {
+  animation: pulse-bar 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-bar {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scaleX(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes scale-in {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
