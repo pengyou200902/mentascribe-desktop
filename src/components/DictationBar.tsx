@@ -132,9 +132,14 @@ export const DictationBar: FC<DictationBarProps> = ({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
     if (draggable && e.button === 0) {
-      getCurrentWindow().startDragging();
+      e.preventDefault();
+      try {
+        await getCurrentWindow().startDragging();
+      } catch (err) {
+        console.error('startDragging failed:', err);
+      }
     }
   }, [draggable]);
 

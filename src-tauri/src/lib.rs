@@ -12,7 +12,7 @@ mod dictionary;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -65,6 +65,9 @@ fn setup_dictation_panel(app: &tauri::AppHandle) {
                 panel.set_floating_panel(true);
                 panel.set_hides_on_deactivate(false);
 
+                // Native background dragging is controlled by the widget.draggable setting
+                // and applied in refresh_panel_settings() on every show.
+
                 log::info!("Dictation window successfully converted to NSPanel for fullscreen overlay support");
             }
             Err(e) => {
@@ -78,7 +81,8 @@ fn setup_dictation_panel(app: &tauri::AppHandle) {
 }
 
 /// Refresh the panel settings after showing the window.
-/// This ensures the panel maintains its fullscreen overlay capabilities.
+/// This ensures the panel maintains its fullscreen overlay capabilities
+/// and applies the current draggable setting.
 #[cfg(target_os = "macos")]
 fn refresh_panel_settings(app: &tauri::AppHandle) {
     // Use the cocoa types re-exported from tauri_nspanel to avoid version mismatch
@@ -97,6 +101,12 @@ fn refresh_panel_settings(app: &tauri::AppHandle) {
             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
         panel.set_collection_behaviour(behavior);
+
+        // Apply draggable setting: allow native window drag by clicking anywhere on background
+        let is_draggable = app.state::<AppState>().settings.lock()
+            .map(|s| s.widget.draggable)
+            .unwrap_or(false);
+        panel.set_moveable_by_window_background(is_draggable);
     }
 }
 
@@ -403,29 +413,27 @@ const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
 const DOCK_OFFSET: f64 = 20.0;
 
 /// Calculate the centered position for the dictation window on a given monitor.
-/// Uses logical coordinates - Tauri's set_position(LogicalPosition) handles scale factor conversion.
+/// Uses physical coordinates directly to avoid scale-factor mismatch in multi-monitor setups.
 ///
-/// The key insight is that:
-/// - Monitor.position() and Monitor.size() return PHYSICAL coordinates
-/// - We convert them to LOGICAL by dividing by scale_factor
-/// - Then we calculate centering in logical space
-/// - Finally we use LogicalPosition with set_position() and Tauri handles the rest
-fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> LogicalPosition<f64> {
+/// When using LogicalPosition, Tauri converts back to physical using the *window's current*
+/// monitor's scale factor — not the target monitor's. In mixed-DPI setups (e.g. Retina laptop
+/// + 1x external monitors), this produces wrong coordinates. Using PhysicalPosition bypasses
+/// the issue entirely.
+fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> tauri::PhysicalPosition<i32> {
     let scale_factor = monitor.scale_factor();
     let screen_pos = monitor.position();
     let screen_size = monitor.size();
 
-    // Convert monitor's physical coordinates to logical coordinates
-    let logical_screen_x = screen_pos.x as f64 / scale_factor;
-    let logical_screen_y = screen_pos.y as f64 / scale_factor;
-    let logical_screen_width = screen_size.width as f64 / scale_factor;
-    let logical_screen_height = screen_size.height as f64 / scale_factor;
+    // Calculate window dimensions in physical pixels for this monitor
+    let window_width_px = (DICTATION_WINDOW_WIDTH * scale_factor) as i32;
+    let window_height_px = (DICTATION_WINDOW_HEIGHT * scale_factor) as i32;
+    let dock_offset_px = (DOCK_OFFSET * scale_factor) as i32;
 
-    // Calculate centered position in logical coordinates
-    let x = logical_screen_x + (logical_screen_width - DICTATION_WINDOW_WIDTH) / 2.0;
-    let y = logical_screen_y + logical_screen_height - DICTATION_WINDOW_HEIGHT - DOCK_OFFSET;
+    // Calculate centered position in physical coordinates
+    let x = screen_pos.x + (screen_size.width as i32 - window_width_px) / 2;
+    let y = screen_pos.y + screen_size.height as i32 - window_height_px - dock_offset_px;
 
-    LogicalPosition::new(x, y)
+    tauri::PhysicalPosition::new(x, y)
 }
 
 fn open_settings_window(app: &tauri::AppHandle) {
