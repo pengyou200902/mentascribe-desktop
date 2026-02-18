@@ -7,6 +7,7 @@ interface DictationBarProps {
   audioLevel?: number;
   error?: string | null;
   statusOverride?: string;
+  draggable?: boolean;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
@@ -14,6 +15,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   isProcessing,
   audioLevel = 0,
   error = null,
+  draggable = false,
 }) => {
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
@@ -130,6 +132,12 @@ export const DictationBar: FC<DictationBarProps> = ({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (draggable && e.button === 0) {
+      getCurrentWindow().startDragging();
+    }
+  }, [draggable]);
+
   // Render idle state - simple horizontal dash
   const renderIdle = () => (
     <div className="wispr-idle">
@@ -175,6 +183,8 @@ export const DictationBar: FC<DictationBarProps> = ({
     <div
       ref={widgetRef}
       className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''}`}
+      style={draggable ? { cursor: 'grab' } : undefined}
+      onMouseDown={handleMouseDown}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
       onMouseEnter={handlePointerEnter}

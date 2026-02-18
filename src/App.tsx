@@ -265,6 +265,7 @@ function App() {
         audioLevel={audioLevel}
         error={error}
         statusOverride={isDownloadingModel ? 'Downloading model...' : undefined}
+        draggable={settings?.widget?.draggable ?? false}
       />
     </div>
   );

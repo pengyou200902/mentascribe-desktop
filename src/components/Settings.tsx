@@ -211,6 +211,26 @@ export const Settings: FC<SettingsProps> = ({ onBack, embedded = false }) => {
         </div>
       </section>
 
+      {/* Widget Settings */}
+      <section className="bg-gray-800 rounded-lg p-4">
+        <h3 className="font-medium mb-4">Widget</h3>
+
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={settings.widget?.draggable ?? false}
+            onChange={(e) =>
+              handleChange('widget', 'draggable', e.target.checked)
+            }
+            className="text-blue-500"
+          />
+          <span>Draggable widget</span>
+        </label>
+        <p className="text-sm text-gray-400 mt-1 ml-6">
+          Drag the floating bar to any position on screen
+        </p>
+      </section>
+
       {/* AI Cleanup Settings */}
       <section className="bg-gray-800 rounded-lg p-4">
         <h3 className="font-medium mb-4">AI Cleanup (Optional)</h3>

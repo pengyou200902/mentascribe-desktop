@@ -43,11 +43,18 @@ pub struct OutputSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WidgetSettings {
+    pub draggable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserSettings {
     pub transcription: TranscriptionSettings,
     pub cleanup: CleanupSettings,
     pub hotkey: HotkeySettings,
     pub output: OutputSettings,
+    #[serde(default)]
+    pub widget: WidgetSettings,
 }
 
 fn get_settings_path() -> PathBuf {

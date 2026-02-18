@@ -29,11 +29,16 @@ export interface OutputSettings {
   auto_capitalize?: boolean;
 }
 
+export interface WidgetSettings {
+  draggable: boolean;
+}
+
 export interface UserSettings {
   transcription: TranscriptionSettings;
   cleanup: CleanupSettings;
   hotkey: HotkeySettings;
   output: OutputSettings;
+  widget: WidgetSettings;
 }
 
 interface Store {
