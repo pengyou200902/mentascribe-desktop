@@ -397,40 +397,65 @@ fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
 }
 
+/// Convert monitor.position() back to CG display coordinate points.
+///
+/// On macOS, tao's monitor.position() applies `from_logical(cgdisplaybounds_origin, scale_factor)`
+/// which corrupts coordinates in mixed-DPI setups (Tauri issue #7890). The offsets end up in the
+/// primary monitor's point space multiplied by each monitor's OWN scale factor, creating
+/// overlapping ranges when monitors have different DPI. Dividing back by scale_factor recovers
+/// the original CGDisplayBounds point-space values.
+fn monitor_origin_points(monitor: &tauri::window::Monitor) -> (f64, f64) {
+    let pos = monitor.position();
+    let sf = monitor.scale_factor();
+    (pos.x as f64 / sf, pos.y as f64 / sf)
+}
+
+/// Get monitor size in display coordinate points (logical pixels).
+fn monitor_size_points(monitor: &tauri::window::Monitor) -> (f64, f64) {
+    let size = monitor.size();
+    let sf = monitor.scale_factor();
+    (size.width as f64 / sf, size.height as f64 / sf)
+}
+
 /// Find the monitor containing the cursor, with a nearest-monitor fallback.
-/// The strict bounds check can fail in multi-monitor setups due to gaps in display
-/// arrangement, coordinate rounding, or macOS coordinate system quirks.
+///
+/// All comparisons are done in CG display coordinate **points** to avoid the mixed
+/// physical/logical coordinate bug (Tauri issue #7890) that causes wrong monitor
+/// detection in mixed-DPI multi-monitor setups.
+///
+/// cursor_position() on macOS returns CGEvent.location() values (CG display points)
+/// labeled as PhysicalPosition — they are NOT true physical pixels.
 fn find_monitor_for_cursor(
     cursor: &tauri::PhysicalPosition<f64>,
     monitors: &[tauri::window::Monitor],
 ) -> Option<usize> {
-    let cx = cursor.x as i32;
-    let cy = cursor.y as i32;
+    // cursor is in CG display points (despite being labeled PhysicalPosition)
+    let cx = cursor.x;
+    let cy = cursor.y;
 
-    // Try strict bounds first
+    // Try strict bounds first — all in point space
     if let Some(idx) = monitors.iter().position(|m| {
-        let pos = m.position();
-        let size = m.size();
-        cx >= pos.x && cx < pos.x + size.width as i32 &&
-        cy >= pos.y && cy < pos.y + size.height as i32
+        let (mx, my) = monitor_origin_points(m);
+        let (mw, mh) = monitor_size_points(m);
+        cx >= mx && cx < mx + mw && cy >= my && cy < my + mh
     }) {
         return Some(idx);
     }
 
-    // Fallback: find the monitor whose center is nearest to the cursor.
-    // This handles gaps between monitors and edge-case coordinate mismatches.
+    // Fallback: find the monitor whose center is nearest to the cursor in point space
     monitors.iter().enumerate().min_by_key(|(_, m)| {
-        let pos = m.position();
-        let size = m.size();
-        let center_x = pos.x as i64 + size.width as i64 / 2;
-        let center_y = pos.y as i64 + size.height as i64 / 2;
-        let dx = cx as i64 - center_x;
-        let dy = cy as i64 - center_y;
-        dx * dx + dy * dy
+        let (mx, my) = monitor_origin_points(m);
+        let (mw, mh) = monitor_size_points(m);
+        let center_x = mx + mw / 2.0;
+        let center_y = my + mh / 2.0;
+        let dx = cx - center_x;
+        let dy = cy - center_y;
+        // Multiply by 1000 for precision when casting to integer for min_by_key
+        ((dx * dx + dy * dy) * 1000.0) as i64
     }).map(|(idx, _)| idx)
 }
 
-/// Constants for dictation window dimensions (logical pixels, as defined in tauri.conf.json)
+/// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json)
 const DICTATION_WINDOW_WIDTH: f64 = 340.0;
 const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
@@ -438,27 +463,21 @@ const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
 const DOCK_OFFSET: f64 = 20.0;
 
 /// Calculate the centered position for the dictation window on a given monitor.
-/// Uses physical coordinates directly to avoid scale-factor mismatch in multi-monitor setups.
 ///
-/// When using LogicalPosition, Tauri converts back to physical using the *window's current*
-/// monitor's scale factor — not the target monitor's. In mixed-DPI setups (e.g. Retina laptop
-/// + 1x external monitors), this produces wrong coordinates. Using PhysicalPosition bypasses
-/// the issue entirely.
-fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> tauri::PhysicalPosition<i32> {
-    let scale_factor = monitor.scale_factor();
-    let screen_pos = monitor.position();
-    let screen_size = monitor.size();
+/// Returns LogicalPosition in CG display coordinate points. Using LogicalPosition
+/// avoids the mixed-DPI coordinate bug (Tauri issue #7890): when set_position receives
+/// a PhysicalPosition, tao divides by the window's CURRENT monitor scale factor (not the
+/// target's), placing the window on the wrong monitor. LogicalPosition passes through
+/// to AppKit's setFrameTopLeftPoint without scale conversion.
+fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> tauri::LogicalPosition<f64> {
+    let (screen_x, screen_y) = monitor_origin_points(monitor);
+    let (screen_w, screen_h) = monitor_size_points(monitor);
 
-    // Calculate window dimensions in physical pixels for this monitor
-    let window_width_px = (DICTATION_WINDOW_WIDTH * scale_factor) as i32;
-    let window_height_px = (DICTATION_WINDOW_HEIGHT * scale_factor) as i32;
-    let dock_offset_px = (DOCK_OFFSET * scale_factor) as i32;
+    // Calculate centered bottom position in display points
+    let x = screen_x + (screen_w - DICTATION_WINDOW_WIDTH) / 2.0;
+    let y = screen_y + screen_h - DICTATION_WINDOW_HEIGHT - DOCK_OFFSET;
 
-    // Calculate centered position in physical coordinates
-    let x = screen_pos.x + (screen_size.width as i32 - window_width_px) / 2;
-    let y = screen_pos.y + screen_size.height as i32 - window_height_px - dock_offset_px;
-
-    tauri::PhysicalPosition::new(x, y)
+    tauri::LogicalPosition::new(x, y)
 }
 
 fn open_settings_window(app: &tauri::AppHandle) {
@@ -504,8 +523,10 @@ fn open_dashboard_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Reposition dictation window to the monitor where the mouse currently is
-/// Returns true if window was moved to a different monitor
+/// Reposition dictation window to the monitor where the mouse currently is.
+/// All coordinate math is done in CG display coordinate **points** to work around
+/// the mixed physical/logical coordinate bug in tao on macOS (Tauri issue #7890).
+/// Returns true if window was moved to a different monitor.
 #[tauri::command]
 fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
     // Skip repositioning when widget is draggable (user controls position)
@@ -524,11 +545,11 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         return Ok(false);
     }
 
-    // Get current cursor position (returns physical coordinates)
+    // cursor_position() returns CG display points (labeled as PhysicalPosition on macOS)
     let cursor_pos = window.cursor_position()
         .map_err(|e| format!("Failed to get cursor position: {}", e))?;
 
-    // Find the monitor containing the cursor (with nearest-monitor fallback)
+    // Find the monitor containing the cursor (comparison in point space)
     let monitors: Vec<_> = window.available_monitors()
         .map_err(|e| format!("Failed to get monitors: {}", e))?
         .into_iter().collect();
@@ -539,32 +560,40 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "No monitor found".to_string())?;
 
-    let screen_pos = monitor.position();
-    let screen_size = monitor.size();
-
-    // Check if window center is on the same monitor as cursor
-    // Use physical coordinates for this check since monitor position/size are physical
+    // Check if window center is already on the target monitor — all in point space.
+    // outer_position() returns PhysicalPosition scaled by the window's current monitor
+    // scale factor. Dividing by that factor recovers CG display points.
+    let win_scale = window.scale_factor().unwrap_or(1.0);
     let current_pos = window.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
-    let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
-    let window_center_x = current_pos.x + actual_window_size.width as i32 / 2;
-    let window_center_y = current_pos.y + actual_window_size.height as i32 / 2;
+    let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(
+        (DICTATION_WINDOW_WIDTH * win_scale) as u32,
+        (DICTATION_WINDOW_HEIGHT * win_scale) as u32,
+    ));
+
+    // Convert to display points
+    let win_x = current_pos.x as f64 / win_scale;
+    let win_y = current_pos.y as f64 / win_scale;
+    let win_w = actual_window_size.width as f64 / win_scale;
+    let win_h = actual_window_size.height as f64 / win_scale;
+    let win_center_x = win_x + win_w / 2.0;
+    let win_center_y = win_y + win_h / 2.0;
+
+    let (screen_x, screen_y) = monitor_origin_points(&monitor);
+    let (screen_w, screen_h) = monitor_size_points(&monitor);
 
     let window_on_same_monitor =
-        window_center_x >= screen_pos.x &&
-        window_center_x < screen_pos.x + screen_size.width as i32 &&
-        window_center_y >= screen_pos.y &&
-        window_center_y < screen_pos.y + screen_size.height as i32;
+        win_center_x >= screen_x &&
+        win_center_x < screen_x + screen_w &&
+        win_center_y >= screen_y &&
+        win_center_y < screen_y + screen_h;
 
     if !window_on_same_monitor {
         let target_pos = calculate_dictation_position(&monitor);
 
-        // Hide window, reposition, then show - this prevents the flicker
-        window.hide().ok();
+        // Move directly without hide/show — the hide→show cycle causes a visible
+        // flash/blink. set_position alone is instantaneous on macOS.
         window.set_position(target_pos)
             .map_err(|e| format!("Failed to set position: {}", e))?;
-        window.show().ok();
-        // Re-apply panel settings after show (macOS may reset them)
-        refresh_panel_settings(&app);
         Ok(true)
     } else {
         Ok(false)
