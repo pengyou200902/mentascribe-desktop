@@ -608,15 +608,14 @@ pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<Str
     // Prepare audio for Whisper (16kHz mono)
     let samples = prepare_for_whisper(audio);
 
-    // Pre-filter with Silero VAD to strip non-speech segments
-    let samples = vad_filter_speech(&samples);
-
-    // Run transcription in blocking task to not block async runtime
+    // Run VAD + transcription in blocking task to not block async runtime.
+    // Both VAD (model load + neural inference) and Whisper are heavy FFI work.
     let path = model_path.clone();
     let language = settings.transcription.language.clone();
     let size = model_size.clone();
 
     let result = tokio::task::spawn_blocking(move || {
+        let samples = vad_filter_speech(&samples);
         run_whisper(&path, &size, &samples, language.as_deref())
     })
     .await
@@ -698,10 +697,12 @@ fn run_whisper(
     // === Dynamic audio_ctx: limit encoder window to actual audio length ===
     // Whisper always processes a 30s window (1500 mel frames). For short dictation,
     // most of that is zero-padded silence. Setting audio_ctx proportionally skips it.
+    // whisper.cpp rejects audio_ctx > 1500 (returns -5), so clamp to that max.
+    // whisper.cpp internally pads to multiples of 256 via GGML_PAD.
     let audio_seconds = samples.len() as f32 / 16000.0;
     let audio_ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
-    let audio_ctx = ((audio_ctx + 63) / 64) * 64; // round up to multiple of 64
-    let audio_ctx = audio_ctx.max(768); // quality degrades below 768
+    let audio_ctx = ((audio_ctx + 255) / 256) * 256; // round up to multiple of 256
+    let audio_ctx = audio_ctx.clamp(768, 1500); // min 768 (quality), max 1500 (whisper limit)
     params.set_audio_ctx(audio_ctx);
 
     // === Disable temperature fallback ===
