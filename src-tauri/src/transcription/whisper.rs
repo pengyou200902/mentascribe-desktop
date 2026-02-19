@@ -198,6 +198,15 @@ fn run_whisper(
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
+    // Use available performance cores for parallel inference
+    let n_threads = std::thread::available_parallelism()
+        .map(|n| n.get() as i32)
+        .unwrap_or(4)
+        .min(8); // Cap at 8 — diminishing returns beyond that
+    params.set_n_threads(n_threads);
+
+    log::info!("Whisper params: n_threads={}, greedy(best_of=1)", n_threads);
+
     // Set language if specified
     if let Some(lang) = language {
         if lang != "auto" {
@@ -210,6 +219,7 @@ fn run_whisper(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    params.set_token_timestamps(false);
 
     state
         .full(params, samples)
