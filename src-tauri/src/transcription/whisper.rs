@@ -697,13 +697,23 @@ fn run_whisper(
     // === Dynamic audio_ctx: limit encoder window to actual audio length ===
     // Whisper always processes a 30s window (1500 mel frames). For short dictation,
     // most of that is zero-padded silence. Setting audio_ctx proportionally skips it.
-    // whisper.cpp rejects audio_ctx > 1500 (returns -5), so clamp to that max.
-    // whisper.cpp internally pads to multiples of 256 via GGML_PAD.
+    //
+    // IMPORTANT: CoreML encoder models are compiled with a FIXED input shape (1500 frames).
+    // Setting audio_ctx < 1500 causes shape mismatch → garbage encoder output → hallucinations
+    // like "thank you". Only apply dynamic audio_ctx for CPU-only inference (no CoreML encoder).
     let audio_seconds = samples.len() as f32 / 16000.0;
-    let audio_ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
-    let audio_ctx = ((audio_ctx + 255) / 256) * 256; // round up to multiple of 256
-    let audio_ctx = audio_ctx.clamp(768, 1500); // min 768 (quality), max 1500 (whisper limit)
-    params.set_audio_ctx(audio_ctx);
+    let has_coreml = is_coreml_downloaded(model_size);
+    let audio_ctx = if has_coreml {
+        0 // 0 = use default (full 1500 window), safe for CoreML
+    } else {
+        // CPU-only: shrink encoder window proportionally for speed
+        let ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
+        let ctx = ((ctx + 255) / 256) * 256; // round up to multiple of 256
+        ctx.clamp(768, 1500) // min 768 (quality), max 1500 (whisper limit)
+    };
+    if audio_ctx > 0 {
+        params.set_audio_ctx(audio_ctx);
+    }
 
     // === Disable temperature fallback ===
     // Prevents retry mechanism with increasing temperature on failure.
@@ -725,8 +735,8 @@ fn run_whisper(
     params.set_max_tokens(128);
 
     log::info!(
-        "Whisper params: n_threads={}, audio_ctx={} ({:.1}s audio), greedy(best_of=1), no_timestamps, single_segment, max_tokens=128",
-        n_threads, audio_ctx, audio_seconds
+        "Whisper params: n_threads={}, audio_ctx={}{} ({:.1}s audio), greedy(best_of=1), no_timestamps, single_segment, max_tokens=128",
+        n_threads, audio_ctx, if has_coreml { " (CoreML, full window)" } else { "" }, audio_seconds
     );
 
     // Set language if specified
