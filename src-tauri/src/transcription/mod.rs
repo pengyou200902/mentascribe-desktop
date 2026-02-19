@@ -10,6 +10,7 @@ pub struct ModelInfo {
     pub size_mb: u32,
     pub downloaded: bool,
     pub coreml_downloaded: bool,
+    pub coreml_size_mb: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

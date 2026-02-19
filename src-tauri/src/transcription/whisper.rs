@@ -1,6 +1,7 @@
 use crate::audio::{capture::prepare_for_whisper, AudioData};
 use crate::settings::UserSettings;
 use once_cell::sync::Lazy;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use thiserror::Error;
@@ -63,6 +64,18 @@ pub fn is_coreml_downloaded(size: &str) -> bool {
     get_models_dir().join(coreml_encoder_name(size)).is_dir()
 }
 
+/// Approximate CoreML encoder zip download sizes (MB) from HuggingFace.
+fn coreml_size_mb(size: &str) -> u32 {
+    match size {
+        "tiny" => 42,
+        "base" => 78,
+        "small" => 244,
+        "medium" => 776,
+        "large" => 1550,
+        _ => 0,
+    }
+}
+
 /// Get CoreML support status for this platform.
 pub fn get_coreml_status() -> CoremlStatus {
     CoremlStatus {
@@ -82,6 +95,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             size_mb: 75,
             downloaded: models_dir.join("ggml-tiny.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("tiny"),
+            coreml_size_mb: coreml_size_mb("tiny"),
         },
         ModelInfo {
             id: "base".to_string(),
@@ -89,6 +103,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             size_mb: 142,
             downloaded: models_dir.join("ggml-base.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("base"),
+            coreml_size_mb: coreml_size_mb("base"),
         },
         ModelInfo {
             id: "small".to_string(),
@@ -96,6 +111,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             size_mb: 466,
             downloaded: models_dir.join("ggml-small.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("small"),
+            coreml_size_mb: coreml_size_mb("small"),
         },
         ModelInfo {
             id: "medium".to_string(),
@@ -103,6 +119,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             size_mb: 1500,
             downloaded: models_dir.join("ggml-medium.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("medium"),
+            coreml_size_mb: coreml_size_mb("medium"),
         },
         ModelInfo {
             id: "large".to_string(),
@@ -110,22 +127,26 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             size_mb: 2900,
             downloaded: models_dir.join("ggml-large-v3.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("large"),
+            coreml_size_mb: coreml_size_mb("large"),
         },
     ]
 }
 
-pub async fn download_model(size: &str) -> Result<(), WhisperError> {
+pub async fn download_model(
+    size: &str,
+    on_progress: impl Fn(u8),
+) -> Result<(), WhisperError> {
     let models_dir = get_models_dir();
     std::fs::create_dir_all(&models_dir)?;
 
     let model_name = if size == "large" {
-        "ggml-large-v3.bin"
+        "ggml-large-v3.bin".to_string()
     } else {
-        &format!("ggml-{}.bin", size)
+        format!("ggml-{}.bin", size)
     };
 
     let url = format!("{}/{}", MODEL_BASE_URL, model_name);
-    let path = models_dir.join(model_name);
+    let path = models_dir.join(&model_name);
 
     log::info!("Downloading model from {} to {:?}", url, path);
 
@@ -140,20 +161,68 @@ pub async fn download_model(size: &str) -> Result<(), WhisperError> {
         )));
     }
 
-    let bytes = response
-        .bytes()
+    let total_size = response.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let mut last_percent: u8 = 0;
+    let mut file =
+        std::fs::File::create(&path).map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+    let mut response = response;
+
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?
+    {
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        if total_size > 0 {
+            let percent = (downloaded * 100 / total_size).min(100) as u8;
+            if percent != last_percent {
+                last_percent = percent;
+                on_progress(percent);
+            }
+        }
+    }
 
-    std::fs::write(&path, bytes)?;
+    log::info!("Model downloaded successfully ({} bytes)", downloaded);
+    Ok(())
+}
 
-    log::info!("Model downloaded successfully");
+/// Delete a downloaded GGML model.
+pub fn delete_model(size: &str) -> Result<(), WhisperError> {
+    let model_path = get_model_path(size);
+    if model_path.exists() {
+        std::fs::remove_file(&model_path)?;
+        // Clear cache if this was the cached model
+        if let Ok(mut cache) = MODEL_CACHE.lock() {
+            if cache.model_size == size {
+                cache.context = None;
+                cache.model_size.clear();
+                cache.model_path = PathBuf::new();
+            }
+        }
+        log::info!("Deleted GGML model: {}", size);
+    }
+    Ok(())
+}
+
+/// Delete a downloaded CoreML encoder model.
+pub fn delete_coreml_model(size: &str) -> Result<(), WhisperError> {
+    let dir = get_models_dir().join(coreml_encoder_name(size));
+    if dir.is_dir() {
+        std::fs::remove_dir_all(&dir)?;
+        log::info!("Deleted CoreML model: {}", size);
+    }
     Ok(())
 }
 
 /// Download the CoreML encoder model for a given size.
 /// Downloads the zip from HuggingFace and extracts it into the models directory.
-pub async fn download_coreml_model(size: &str) -> Result<(), WhisperError> {
+/// Calls `on_progress(percent)` during download (0-99), and 100 is reserved for extraction complete.
+pub async fn download_coreml_model(
+    size: &str,
+    on_progress: impl Fn(u8),
+) -> Result<(), WhisperError> {
     let models_dir = get_models_dir();
     std::fs::create_dir_all(&models_dir)?;
 
@@ -166,6 +235,7 @@ pub async fn download_coreml_model(size: &str) -> Result<(), WhisperError> {
     // Skip if already downloaded
     if dest_dir.is_dir() {
         log::info!("CoreML model already exists: {:?}", dest_dir);
+        on_progress(100);
         return Ok(());
     }
 
@@ -182,13 +252,35 @@ pub async fn download_coreml_model(size: &str) -> Result<(), WhisperError> {
         )));
     }
 
-    let bytes = response
-        .bytes()
-        .await
+    let total_size = response.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let mut last_percent: u8 = 0;
+    let mut file = std::fs::File::create(&zip_path)
         .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+    let mut response = response;
 
-    std::fs::write(&zip_path, &bytes)?;
-    log::info!("CoreML zip downloaded ({} bytes), extracting...", bytes.len());
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?
+    {
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        if total_size > 0 {
+            // Cap download phase at 99% — 100% means extraction done
+            let percent = (downloaded * 99 / total_size).min(99) as u8;
+            if percent != last_percent {
+                last_percent = percent;
+                on_progress(percent);
+            }
+        }
+    }
+    drop(file);
+
+    log::info!(
+        "CoreML zip downloaded ({} bytes), extracting...",
+        downloaded
+    );
 
     // Extract using unzip (always available on macOS)
     let output = std::process::Command::new("unzip")
@@ -215,6 +307,7 @@ pub async fn download_coreml_model(size: &str) -> Result<(), WhisperError> {
 
     if dest_dir.is_dir() {
         log::info!("CoreML model extracted successfully: {:?}", dest_dir);
+        on_progress(100);
     } else {
         return Err(WhisperError::DownloadError(format!(
             "Extraction succeeded but {:?} not found",
