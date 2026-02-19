@@ -232,9 +232,12 @@ async fn stop_recording(
         s.clone()
     };
 
-    // Transcribe audio
+    // Calculate duration before moving audio_data into transcribe
+    let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
+
+    // Transcribe audio (takes ownership of audio_data to avoid unnecessary clone)
     eprintln!("[recording] Starting transcription...");
-    let raw_text = transcription::whisper::transcribe(&audio_data, &settings)
+    let raw_text = transcription::whisper::transcribe(audio_data, &settings)
         .await
         .map_err(|e| {
             eprintln!("[recording] ERROR: Transcription failed: {}", e);
@@ -261,7 +264,6 @@ async fn stop_recording(
 
     // Calculate stats for recording
     let word_count = text.split_whitespace().count() as u32;
-    let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
 
     // Record to local history and stats (fire and forget, don't fail transcription)
     if let Err(e) = history::add_entry(&text, word_count, duration_ms) {

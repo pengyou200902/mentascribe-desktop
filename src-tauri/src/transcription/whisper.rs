@@ -349,7 +349,7 @@ pub async fn download_coreml_model(
     Ok(())
 }
 
-pub async fn transcribe(audio: &AudioData, settings: &UserSettings) -> Result<String, WhisperError> {
+pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<String, WhisperError> {
     let model_size = settings
         .transcription
         .model_size

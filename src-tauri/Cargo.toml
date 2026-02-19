@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["full"] }
 # Audio
 cpal = "0.15"
 hound = "3.5"
+rubato = "0.16"
 
 # Speech-to-text (CoreML feature added via macOS target section below)
 whisper-rs = "0.15"

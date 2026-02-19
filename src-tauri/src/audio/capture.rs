@@ -271,8 +271,9 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
     })
 }
 
-/// Resample audio to 16kHz mono for Whisper, with silence trimming
-pub fn prepare_for_whisper(audio: &AudioData) -> Vec<f32> {
+/// Resample audio to 16kHz mono for Whisper, with silence trimming.
+/// Takes ownership of AudioData to avoid cloning samples when already mono.
+pub fn prepare_for_whisper(audio: AudioData) -> Vec<f32> {
     use super::vad::trim_silence;
 
     eprintln!(
@@ -295,8 +296,8 @@ pub fn prepare_for_whisper(audio: &AudioData) -> Vec<f32> {
             .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
             .collect()
     } else {
-        // Clone needed: we only have &AudioData and need a mutable owned Vec
-        audio.samples.clone()
+        // No clone needed: we own the AudioData and can move the samples directly
+        audio.samples
     };
 
     eprintln!("[audio] After mono conversion: {} samples", mono_samples.len());
@@ -343,9 +344,74 @@ pub fn prepare_for_whisper(audio: &AudioData) -> Vec<f32> {
 }
 
 fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    use rubato::{
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    };
+
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
     }
+
+    let ratio = to_rate as f64 / from_rate as f64;
+
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+    let chunk_size = 1024;
+    let mut resampler = match SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[audio] rubato resampler creation failed: {}, falling back to linear", e);
+            return resample_linear(samples, from_rate, to_rate);
+        }
+    };
+
+    let mut output: Vec<f32> = Vec::with_capacity((samples.len() as f64 * ratio) as usize + chunk_size);
+
+    // Process full chunks
+    let mut pos = 0;
+    while pos + chunk_size <= samples.len() {
+        let chunk = &samples[pos..pos + chunk_size];
+        match resampler.process(&[chunk], None) {
+            Ok(result) => {
+                if let Some(channel) = result.first() {
+                    output.extend_from_slice(channel);
+                }
+            }
+            Err(e) => {
+                eprintln!("[audio] rubato process error: {}, falling back to linear", e);
+                return resample_linear(samples, from_rate, to_rate);
+            }
+        }
+        pos += chunk_size;
+    }
+
+    // Process remaining samples (partial chunk)
+    if pos < samples.len() {
+        let remainder = &samples[pos..];
+        match resampler.process_partial(Some(&[remainder]), None) {
+            Ok(result) => {
+                if let Some(channel) = result.first() {
+                    output.extend_from_slice(channel);
+                }
+            }
+            Err(e) => {
+                eprintln!("[audio] rubato process_partial error: {}, falling back to linear", e);
+                return resample_linear(samples, from_rate, to_rate);
+            }
+        }
+    }
+
+    output
+}
+
+/// Fallback linear interpolation resampler (used if rubato fails)
+fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     let ratio = from_rate as f64 / to_rate as f64;
     let new_len = (samples.len() as f64 / ratio) as usize;
     let mut resampled = Vec::with_capacity(new_len);
@@ -356,9 +422,8 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
         let frac = src_pos - src_idx as f64;
 
         if src_idx + 1 < samples.len() {
-            // Linear interpolation between adjacent samples
-            let sample = samples[src_idx] as f64 * (1.0 - frac)
-                + samples[src_idx + 1] as f64 * frac;
+            let sample =
+                samples[src_idx] as f64 * (1.0 - frac) + samples[src_idx + 1] as f64 * frac;
             resampled.push(sample as f32);
         } else if src_idx < samples.len() {
             resampled.push(samples[src_idx]);
