@@ -397,87 +397,99 @@ fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
 }
 
-/// Convert monitor.position() back to CG display coordinate points.
-///
-/// On macOS, tao's monitor.position() applies `from_logical(cgdisplaybounds_origin, scale_factor)`
-/// which corrupts coordinates in mixed-DPI setups (Tauri issue #7890). The offsets end up in the
-/// primary monitor's point space multiplied by each monitor's OWN scale factor, creating
-/// overlapping ranges when monitors have different DPI. Dividing back by scale_factor recovers
-/// the original CGDisplayBounds point-space values.
-fn monitor_origin_points(monitor: &tauri::window::Monitor) -> (f64, f64) {
-    let pos = monitor.position();
-    let sf = monitor.scale_factor();
-    (pos.x as f64 / sf, pos.y as f64 / sf)
-}
-
-/// Get monitor size in display coordinate points (logical pixels).
-fn monitor_size_points(monitor: &tauri::window::Monitor) -> (f64, f64) {
-    let size = monitor.size();
-    let sf = monitor.scale_factor();
-    (size.width as f64 / sf, size.height as f64 / sf)
-}
-
-/// Find the monitor containing the cursor, with a nearest-monitor fallback.
-///
-/// All comparisons are done in CG display coordinate **points** to avoid the mixed
-/// physical/logical coordinate bug (Tauri issue #7890) that causes wrong monitor
-/// detection in mixed-DPI multi-monitor setups.
-///
-/// cursor_position() on macOS returns CGEvent.location() values (CG display points)
-/// labeled as PhysicalPosition — they are NOT true physical pixels.
-fn find_monitor_for_cursor(
-    cursor: &tauri::PhysicalPosition<f64>,
-    monitors: &[tauri::window::Monitor],
-) -> Option<usize> {
-    // cursor is in CG display points (despite being labeled PhysicalPosition)
-    let cx = cursor.x;
-    let cy = cursor.y;
-
-    // Try strict bounds first — all in point space
-    if let Some(idx) = monitors.iter().position(|m| {
-        let (mx, my) = monitor_origin_points(m);
-        let (mw, mh) = monitor_size_points(m);
-        cx >= mx && cx < mx + mw && cy >= my && cy < my + mh
-    }) {
-        return Some(idx);
-    }
-
-    // Fallback: find the monitor whose center is nearest to the cursor in point space
-    monitors.iter().enumerate().min_by_key(|(_, m)| {
-        let (mx, my) = monitor_origin_points(m);
-        let (mw, mh) = monitor_size_points(m);
-        let center_x = mx + mw / 2.0;
-        let center_y = my + mh / 2.0;
-        let dx = cx - center_x;
-        let dy = cy - center_y;
-        // Multiply by 1000 for precision when casting to integer for min_by_key
-        ((dx * dx + dy * dy) * 1000.0) as i64
-    }).map(|(idx, _)| idx)
-}
-
 /// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json)
 const DICTATION_WINDOW_WIDTH: f64 = 340.0;
 const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
-/// Wispr Flow uses approximately 20px offset for a snug fit above the dock
 const DOCK_OFFSET: f64 = 20.0;
 
-/// Calculate the centered position for the dictation window on a given monitor.
+/// Position the dictation panel at bottom-center of the monitor containing the cursor.
 ///
-/// Returns LogicalPosition in CG display coordinate points. Using LogicalPosition
-/// avoids the mixed-DPI coordinate bug (Tauri issue #7890): when set_position receives
-/// a PhysicalPosition, tao divides by the window's CURRENT monitor scale factor (not the
-/// target's), placing the window on the wrong monitor. LogicalPosition passes through
-/// to AppKit's setFrameTopLeftPoint without scale conversion.
-fn calculate_dictation_position(monitor: &tauri::window::Monitor) -> tauri::LogicalPosition<f64> {
-    let (screen_x, screen_y) = monitor_origin_points(monitor);
-    let (screen_w, screen_h) = monitor_size_points(monitor);
+/// Uses native macOS AppKit APIs directly, staying entirely in AppKit coordinate space
+/// (bottom-left origin, y increases upward). This bypasses tao's coordinate conversion
+/// layer which has multiple bugs in mixed-DPI multi-monitor setups:
+/// - Tauri issue #7890: monitor.position() mixes logical/physical coordinate spaces
+/// - tao's set_position(PhysicalPosition) divides by the window's CURRENT scale factor
+/// - tao's window_position() uses NSScreen.mainScreen (changes with focus) for y-flip
+///
+/// By using NSEvent.mouseLocation + NSScreen.screens + setFrameOrigin directly, all
+/// coordinates stay in one consistent AppKit space with no conversions.
+///
+/// If `only_if_different_monitor` is true, skips repositioning when the window center
+/// is already on the cursor's screen (used by the 150ms poll to avoid unnecessary moves).
+#[cfg(target_os = "macos")]
+fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_monitor: bool) -> Result<bool, String> {
+    use cocoa::base::id;
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::ManagerExt;
 
-    // Calculate centered bottom position in display points
-    let x = screen_x + (screen_w - DICTATION_WINDOW_WIDTH) / 2.0;
-    let y = screen_y + screen_h - DICTATION_WINDOW_HEIGHT - DOCK_OFFSET;
+    // NSRect is a CGRect — we define a local copy to avoid import issues across cocoa versions
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect {
+        origin: NSPoint,
+        size: NSPoint, // NSSize has the same layout as NSPoint (two f64s)
+    }
 
-    tauri::LogicalPosition::new(x, y)
+    let panel = app.get_webview_panel("dictation")
+        .map_err(|e| format!("{:?}", e))?;
+
+    unsafe {
+        // Get cursor position in AppKit coordinates (bottom-left origin, y increases upward)
+        let mouse_loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+
+        // Iterate NSScreen.screens to find the one containing the cursor
+        let screens: id = msg_send![class!(NSScreen), screens];
+        let count: usize = msg_send![screens, count];
+
+        let mut target_screen_frame: Option<NSRect> = None;
+        let mut target_visible_frame: Option<NSRect> = None;
+
+        for i in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: i];
+            let frame: NSRect = msg_send![screen, frame];
+            if mouse_loc.x >= frame.origin.x && mouse_loc.x < frame.origin.x + frame.size.x &&
+               mouse_loc.y >= frame.origin.y && mouse_loc.y < frame.origin.y + frame.size.y {
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                target_screen_frame = Some(frame);
+                target_visible_frame = Some(visible);
+                break;
+            }
+        }
+
+        let screen_frame = target_screen_frame
+            .ok_or_else(|| "No screen found for cursor".to_string())?;
+        let visible_frame = target_visible_frame.unwrap();
+
+        if only_if_different_monitor {
+            // Check if window center is already on the target screen
+            let win_frame: NSRect = msg_send![&*panel, frame];
+            let cx = win_frame.origin.x + win_frame.size.x / 2.0;
+            let cy = win_frame.origin.y + win_frame.size.y / 2.0;
+
+            let on_same_screen =
+                cx >= screen_frame.origin.x &&
+                cx < screen_frame.origin.x + screen_frame.size.x &&
+                cy >= screen_frame.origin.y &&
+                cy < screen_frame.origin.y + screen_frame.size.y;
+
+            if on_same_screen {
+                return Ok(false);
+            }
+        }
+
+        // Calculate bottom-center in AppKit coordinates.
+        // visibleFrame already excludes dock and menu bar areas.
+        // In AppKit, origin.y is the bottom edge, so we add DOCK_OFFSET above it.
+        let x = visible_frame.origin.x + (visible_frame.size.x - DICTATION_WINDOW_WIDTH) / 2.0;
+        let y = visible_frame.origin.y + DOCK_OFFSET;
+
+        let new_origin = NSPoint::new(x, y);
+        let _: () = msg_send![&*panel, setFrameOrigin: new_origin];
+
+        Ok(true)
+    }
 }
 
 fn open_settings_window(app: &tauri::AppHandle) {
@@ -524,8 +536,6 @@ fn open_dashboard_window(app: &tauri::AppHandle) {
 }
 
 /// Reposition dictation window to the monitor where the mouse currently is.
-/// All coordinate math is done in CG display coordinate **points** to work around
-/// the mixed physical/logical coordinate bug in tao on macOS (Tauri issue #7890).
 /// Returns true if window was moved to a different monitor.
 #[tauri::command]
 fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
@@ -545,58 +555,46 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         return Ok(false);
     }
 
-    // cursor_position() returns CG display points (labeled as PhysicalPosition on macOS)
-    let cursor_pos = window.cursor_position()
-        .map_err(|e| format!("Failed to get cursor position: {}", e))?;
+    // Use native AppKit positioning on macOS (bypasses tao's coordinate bugs)
+    #[cfg(target_os = "macos")]
+    {
+        return native_position_on_cursor_monitor(&app, true);
+    }
 
-    // Find the monitor containing the cursor (comparison in point space)
-    let monitors: Vec<_> = window.available_monitors()
-        .map_err(|e| format!("Failed to get monitors: {}", e))?
-        .into_iter().collect();
-
-    let monitor = find_monitor_for_cursor(&cursor_pos, &monitors)
-        .map(|i| monitors[i].clone())
-        .or_else(|| window.current_monitor().ok().flatten())
-        .or_else(|| window.primary_monitor().ok().flatten())
-        .ok_or_else(|| "No monitor found".to_string())?;
-
-    // Check if window center is already on the target monitor — all in point space.
-    // outer_position() returns PhysicalPosition scaled by the window's current monitor
-    // scale factor. Dividing by that factor recovers CG display points.
-    let win_scale = window.scale_factor().unwrap_or(1.0);
-    let current_pos = window.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
-    let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(
-        (DICTATION_WINDOW_WIDTH * win_scale) as u32,
-        (DICTATION_WINDOW_HEIGHT * win_scale) as u32,
-    ));
-
-    // Convert to display points
-    let win_x = current_pos.x as f64 / win_scale;
-    let win_y = current_pos.y as f64 / win_scale;
-    let win_w = actual_window_size.width as f64 / win_scale;
-    let win_h = actual_window_size.height as f64 / win_scale;
-    let win_center_x = win_x + win_w / 2.0;
-    let win_center_y = win_y + win_h / 2.0;
-
-    let (screen_x, screen_y) = monitor_origin_points(&monitor);
-    let (screen_w, screen_h) = monitor_size_points(&monitor);
-
-    let window_on_same_monitor =
-        win_center_x >= screen_x &&
-        win_center_x < screen_x + screen_w &&
-        win_center_y >= screen_y &&
-        win_center_y < screen_y + screen_h;
-
-    if !window_on_same_monitor {
-        let target_pos = calculate_dictation_position(&monitor);
-
-        // Move directly without hide/show — the hide→show cycle causes a visible
-        // flash/blink. set_position alone is instantaneous on macOS.
-        window.set_position(target_pos)
-            .map_err(|e| format!("Failed to set position: {}", e))?;
-        Ok(true)
-    } else {
-        Ok(false)
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Non-macOS fallback using tao APIs
+        let cursor_pos = window.cursor_position()
+            .map_err(|e| format!("Failed to get cursor position: {}", e))?;
+        let monitor = window.current_monitor().ok().flatten()
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .ok_or_else(|| "No monitor found".to_string())?;
+        let screen_pos = monitor.position();
+        let screen_size = monitor.size();
+        let current_pos = window.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
+        let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
+        let window_center_x = current_pos.x + actual_window_size.width as i32 / 2;
+        let window_center_y = current_pos.y + actual_window_size.height as i32 / 2;
+        let window_on_same_monitor =
+            window_center_x >= screen_pos.x &&
+            window_center_x < screen_pos.x + screen_size.width as i32 &&
+            window_center_y >= screen_pos.y &&
+            window_center_y < screen_pos.y + screen_size.height as i32;
+        if !window_on_same_monitor {
+            let scale = monitor.scale_factor();
+            let pos = monitor.position();
+            let size = monitor.size();
+            let ww = (DICTATION_WINDOW_WIDTH * scale) as i32;
+            let wh = (DICTATION_WINDOW_HEIGHT * scale) as i32;
+            let doff = (DOCK_OFFSET * scale) as i32;
+            let x = pos.x + (size.width as i32 - ww) / 2;
+            let y = pos.y + size.height as i32 - wh - doff;
+            window.set_position(tauri::PhysicalPosition::new(x, y))
+                .map_err(|e| format!("Failed to set position: {}", e))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -610,25 +608,17 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 .map(|s| s.widget.draggable)
                 .unwrap_or(false);
 
-            if !is_draggable {
-                // Reposition to the monitor where the mouse is before showing
-                let monitor = window.cursor_position().ok()
-                    .and_then(|cursor_pos| {
-                        let monitors: Vec<_> = window.available_monitors().ok()?.into_iter().collect();
-                        find_monitor_for_cursor(&cursor_pos, &monitors).map(|i| monitors[i].clone())
-                    })
-                    .or_else(|| window.current_monitor().ok().flatten())
-                    .or_else(|| window.primary_monitor().ok().flatten());
-
-                if let Some(monitor) = monitor {
-                    let target_pos = calculate_dictation_position(&monitor);
-                    window.set_position(target_pos).ok();
-                }
-            }
-
             window.show().ok();
             // Re-apply panel settings after show (macOS may reset them)
             refresh_panel_settings(app);
+
+            if !is_draggable {
+                // Position on cursor's monitor after show (panel must exist)
+                #[cfg(target_os = "macos")]
+                {
+                    native_position_on_cursor_monitor(app, false).ok();
+                }
+            }
         }
     }
 }
@@ -678,23 +668,9 @@ pub fn run() {
                 app_handle.emit("model-needs-download", configured_model).ok();
             }
 
-            // Position dictation window at bottom center of the monitor where mouse is
+            // Show dictation window and convert to NSPanel
             if let Some(window) = app.get_webview_window("dictation") {
-                let monitor = window.cursor_position().ok()
-                    .and_then(|cursor_pos| {
-                        let monitors: Vec<_> = window.available_monitors().ok()?.into_iter().collect();
-                        find_monitor_for_cursor(&cursor_pos, &monitors).map(|i| monitors[i].clone())
-                    })
-                    .or_else(|| window.current_monitor().ok().flatten())
-                    .or_else(|| window.primary_monitor().ok().flatten());
-
-                if let Some(monitor) = monitor {
-                    let target_pos = calculate_dictation_position(&monitor);
-                    window.set_position(target_pos).ok();
-                    window.show().ok();
-                } else {
-                    println!("[window] setup: WARNING - no monitor found");
-                }
+                window.show().ok();
             } else {
                 println!("[window] setup: WARNING - dictation window not found");
             }
@@ -702,6 +678,12 @@ pub fn run() {
             // Convert dictation window to NSPanel on macOS for fullscreen overlay support
             // This MUST be done after the window is shown and rendered
             setup_dictation_panel(&app_handle);
+
+            // Position at bottom-center of cursor's monitor (after panel exists)
+            #[cfg(target_os = "macos")]
+            {
+                native_position_on_cursor_monitor(&app_handle, false).ok();
+            }
 
             // Build tray menu
             let dashboard_item = MenuItem::with_id(app, "dashboard", "Dashboard...", true, None::<&str>)?;
