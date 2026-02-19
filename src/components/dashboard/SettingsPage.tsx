@@ -1179,55 +1179,56 @@ export function SettingsPage() {
                   </button>
                 </div>
 
-                {(settings.transcription.use_coreml ?? true) && (() => {
-                  const selectedModel = settings.transcription.model_size || 'small';
-                  const modelInfo = models.find(m => m.id === selectedModel);
-                  if (!modelInfo?.downloaded) return null;
-
-                  return (
-                    <div className={`
-                      flex items-center justify-between p-3 rounded-xl border transition-all duration-200
-                      ${modelInfo.coreml_downloaded
-                        ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
-                        : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
-                      }
-                    `}>
-                      <div>
-                        <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
-                          CoreML Encoder ({selectedModel})
-                        </span>
-                        <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-                          {modelInfo.coreml_downloaded
-                            ? 'Neural Engine acceleration active'
-                            : 'Download to enable hardware acceleration'
+                {(settings.transcription.use_coreml ?? true) && (
+                  <div className="space-y-2">
+                    {models.filter(m => m.downloaded).map(model => (
+                      <div
+                        key={model.id}
+                        className={`
+                          flex items-center justify-between p-3 rounded-xl border transition-all duration-200
+                          ${model.coreml_downloaded
+                            ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
+                            : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
                           }
-                        </p>
+                        `}
+                      >
+                        <div>
+                          <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
+                            CoreML Encoder ({model.id})
+                          </span>
+                          <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                            {model.coreml_downloaded
+                              ? 'Neural Engine acceleration active'
+                              : 'Download to enable hardware acceleration'
+                            }
+                          </p>
+                        </div>
+                        {model.coreml_downloaded ? (
+                          <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
+                            <CheckIcon />
+                            Active
+                          </span>
+                        ) : downloadingCoreml === model.id ? (
+                          <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            Downloading...
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => downloadCoremlModel(model.id)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
+                          >
+                            <DownloadIcon />
+                            Download
+                          </button>
+                        )}
                       </div>
-                      {modelInfo.coreml_downloaded ? (
-                        <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
-                          <CheckIcon />
-                          Active
-                        </span>
-                      ) : downloadingCoreml === selectedModel ? (
-                        <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                          Downloading...
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => downloadCoremlModel(selectedModel)}
-                          className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
-                        >
-                          <DownloadIcon />
-                          Download
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </SettingsSection>
