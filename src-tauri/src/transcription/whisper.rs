@@ -535,13 +535,46 @@ fn run_whisper(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
     // Use available performance cores for parallel inference
+    // With CoreML handling the encoder on ANE, CPU threads mainly affect the decoder.
+    // 4-6 threads often outperform 8 on Apple Silicon due to reduced contention.
     let n_threads = std::thread::available_parallelism()
         .map(|n| n.get() as i32)
         .unwrap_or(4)
-        .min(8); // Cap at 8 — diminishing returns beyond that
+        .min(6);
     params.set_n_threads(n_threads);
 
-    log::info!("Whisper params: n_threads={}, greedy(best_of=1)", n_threads);
+    // === Dynamic audio_ctx: limit encoder window to actual audio length ===
+    // Whisper always processes a 30s window (1500 mel frames). For short dictation,
+    // most of that is zero-padded silence. Setting audio_ctx proportionally skips it.
+    let audio_seconds = samples.len() as f32 / 16000.0;
+    let audio_ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
+    let audio_ctx = ((audio_ctx + 63) / 64) * 64; // round up to multiple of 64
+    let audio_ctx = audio_ctx.max(768); // quality degrades below 768
+    params.set_audio_ctx(audio_ctx);
+
+    // === Disable temperature fallback ===
+    // Prevents retry mechanism with increasing temperature on failure.
+    // Default retries up to 4-5 times, causing tail-latency spikes.
+    // No quality impact for clean microphone input.
+    params.set_temperature(0.0);
+    params.set_temperature_inc(0.0);
+
+    // === Skip timestamp token generation ===
+    // We only extract text, not timestamps — saves 5-10%.
+    params.set_no_timestamps(true);
+
+    // === Force single-segment output ===
+    // Skips multi-segment seeking logic. Ideal for short dictation utterances.
+    params.set_single_segment(true);
+
+    // === Cap decoder output tokens ===
+    // Prevents hallucination loops that can add seconds of latency.
+    params.set_max_tokens(128);
+
+    log::info!(
+        "Whisper params: n_threads={}, audio_ctx={} ({:.1}s audio), greedy(best_of=1), no_timestamps, single_segment, max_tokens=128",
+        n_threads, audio_ctx, audio_seconds
+    );
 
     // Set language if specified
     if let Some(lang) = language {
