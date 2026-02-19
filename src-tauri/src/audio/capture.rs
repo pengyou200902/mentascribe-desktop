@@ -1,6 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
@@ -24,6 +25,10 @@ pub struct AudioData {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub channels: u16,
+    /// Pre-processed 16kHz mono samples ready for Whisper, produced incrementally
+    /// during recording by the CPAL callback. `None` if real-time resampling failed
+    /// or was unavailable (fallback to post-stop processing in `prepare_for_whisper`).
+    pub whisper_samples: Option<Vec<f32>>,
 }
 
 struct AudioThreadHandle {
@@ -31,14 +36,32 @@ struct AudioThreadHandle {
     thread_handle: JoinHandle<()>,
 }
 
+/// Holds the rubato resampler and a mono sample accumulator buffer.
+/// Created once per recording session; shared between the audio thread and callback
+/// via `Arc<Mutex<>>`. The callback uses `try_lock()` to avoid blocking.
+struct ResamplerState {
+    resampler: FastFixedIn<f32>,
+    /// Mono samples waiting to fill a complete resampler chunk (1024 samples).
+    mono_accumulator: Vec<f32>,
+    /// The resampler's fixed input chunk size.
+    chunk_size: usize,
+    /// Whether real-time resampling has been marked as failed (skip further attempts).
+    failed: bool,
+}
+
 lazy_static::lazy_static! {
     static ref AUDIO_BUFFER: Mutex<Vec<f32>> = Mutex::new(Vec::new());
+    /// Pre-processed 16kHz mono buffer, populated incrementally by the CPAL callback.
+    static ref WHISPER_BUFFER: Mutex<Vec<f32>> = Mutex::new(Vec::new());
     static ref AUDIO_THREAD: Mutex<Option<AudioThreadHandle>> = Mutex::new(None);
     static ref SAMPLE_RATE: Mutex<u32> = Mutex::new(16000);
     static ref CHANNELS: Mutex<u16> = Mutex::new(1);
     static ref CURRENT_AUDIO_LEVEL: Mutex<f32> = Mutex::new(0.0);
     /// Flag to prevent start_capture while stop_capture is in progress
     static ref IS_STOPPING: Mutex<bool> = Mutex::new(false);
+    /// Shared resampler state for the current recording session.
+    /// `None` when not recording or if resampler creation failed.
+    static ref RESAMPLER_STATE: Mutex<Option<Arc<Mutex<ResamplerState>>>> = Mutex::new(None);
 }
 
 /// Calculate RMS (root mean square) audio level from samples
@@ -62,12 +85,51 @@ pub fn reset_state() {
     *AUDIO_THREAD.lock().unwrap() = None;
     *CURRENT_AUDIO_LEVEL.lock().unwrap() = 0.0;
     AUDIO_BUFFER.lock().unwrap().clear();
+    WHISPER_BUFFER.lock().unwrap().clear();
+    *RESAMPLER_STATE.lock().unwrap() = None;
     eprintln!("[capture] State reset complete");
 }
 
 /// Check if capture is currently active
 pub fn is_capturing() -> bool {
     AUDIO_THREAD.lock().unwrap().is_some()
+}
+
+/// Convert a multi-channel interleaved chunk to mono by averaging channels.
+/// Returns the input unchanged if already mono.
+fn to_mono(data: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return data.to_vec();
+    }
+    let ch = channels as usize;
+    data.chunks(ch)
+        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
+        .collect()
+}
+
+/// Process mono samples through the resampler, draining full chunks from the
+/// accumulator. Appends resampled output to `whisper_buf`. Returns `true` on
+/// success, `false` if the resampler encountered an error (caller should mark
+/// the state as failed).
+fn drain_resampler(state: &mut ResamplerState, whisper_buf: &mut Vec<f32>) -> bool {
+    while state.mono_accumulator.len() >= state.chunk_size {
+        let chunk: Vec<f32> = state.mono_accumulator.drain(..state.chunk_size).collect();
+        match state.resampler.process(&[&chunk], None) {
+            Ok(result) => {
+                if let Some(channel) = result.first() {
+                    whisper_buf.extend_from_slice(channel);
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[capture] Resampler process error in callback: {}, disabling real-time resampling",
+                    e
+                );
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub fn start_capture() -> Result<(), AudioError> {
@@ -85,14 +147,23 @@ pub fn start_capture() -> Result<(), AudioError> {
         return Err(AudioError::AlreadyRunning);
     }
 
-    // Clear buffer and pre-allocate for up to 30s at 48kHz stereo
-    // to avoid ~21 Vec reallocations during recording
+    // Clear buffers and pre-allocate
     {
+        // Raw buffer: up to 30s at 48kHz stereo
         let mut buf = AUDIO_BUFFER.lock().unwrap();
         buf.clear();
         buf.reserve(48000 * 2 * 30);
     }
-    eprintln!("[capture] Buffer cleared and pre-allocated");
+    {
+        // Whisper buffer: up to 30s at 16kHz mono
+        let mut wbuf = WHISPER_BUFFER.lock().unwrap();
+        wbuf.clear();
+        wbuf.reserve(16000 * 30);
+    }
+    // Clear any previous resampler state (will be created after we know the device config)
+    *RESAMPLER_STATE.lock().unwrap() = None;
+
+    eprintln!("[capture] Buffers cleared and pre-allocated");
 
     // Create channel for stop signal
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -114,20 +185,64 @@ pub fn start_capture() -> Result<(), AudioError> {
                 .default_input_config()
                 .map_err(|e| AudioError::ConfigError(e.to_string()))?;
 
-            *SAMPLE_RATE.lock().unwrap() = config.sample_rate().0;
-            *CHANNELS.lock().unwrap() = config.channels();
+            let sr = config.sample_rate().0;
+            let ch = config.channels();
+            *SAMPLE_RATE.lock().unwrap() = sr;
+            *CHANNELS.lock().unwrap() = ch;
 
             eprintln!(
                 "[capture] Audio config: {} Hz, {} channels",
-                config.sample_rate().0,
-                config.channels()
+                sr, ch
             );
+
+            // Create resampler if sample rate differs from 16kHz.
+            // If already 16kHz, we only need mono conversion (no resampler needed).
+            let resampler_arc: Option<Arc<Mutex<ResamplerState>>> = if sr != 16000 {
+                let ratio = 16000_f64 / sr as f64;
+                let chunk_size = 1024_usize;
+                match FastFixedIn::<f32>::new(ratio, 2.0, PolynomialDegree::Cubic, chunk_size, 1) {
+                    Ok(r) => {
+                        eprintln!(
+                            "[capture] Real-time resampler created: {}Hz -> 16kHz (ratio={:.4}, chunk={})",
+                            sr, ratio, chunk_size
+                        );
+                        let state = ResamplerState {
+                            resampler: r,
+                            mono_accumulator: Vec::with_capacity(chunk_size * 2),
+                            chunk_size,
+                            failed: false,
+                        };
+                        let arc = Arc::new(Mutex::new(state));
+                        // Store in global so stop_capture can flush
+                        *RESAMPLER_STATE.lock().unwrap() = Some(Arc::clone(&arc));
+                        Some(arc)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[capture] WARNING: Failed to create real-time resampler: {}. \
+                             Will fall back to post-stop resampling.",
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                // Already 16kHz -- just need mono conversion, no resampler
+                // We still create a "passthrough" ResamplerState with no resampler,
+                // but it's simpler to handle this case inline in the callback.
+                eprintln!("[capture] Input is already 16kHz, only mono conversion needed in callback");
+                None
+            };
 
             use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
             static CALLBACK_COUNT: AtomicUsize = AtomicUsize::new(0);
             static TOTAL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
             CALLBACK_COUNT.store(0, AtomicOrdering::SeqCst);
             TOTAL_SAMPLES.store(0, AtomicOrdering::SeqCst);
+
+            // Capture values for the callback closure
+            let cb_channels = ch;
+            let cb_sample_rate = sr;
 
             let stream = device
                 .build_input_stream(
@@ -151,15 +266,46 @@ pub fn start_capture() -> Result<(), AudioError> {
                         // Use higher multiplier for better sensitivity
                         let normalized = (rms * 15.0).min(1.0);
 
-                        if let Ok(mut level) = CURRENT_AUDIO_LEVEL.lock() {
+                        if let Ok(mut level) = CURRENT_AUDIO_LEVEL.try_lock() {
                             let old_level = *level;
                             // Less smoothing for more responsive visualization
                             *level = old_level * 0.15 + normalized * 0.85;
                         }
 
-                        if let Ok(mut buf) = AUDIO_BUFFER.lock() {
+                        // Append raw samples to AUDIO_BUFFER (for audio level display etc.)
+                        if let Ok(mut buf) = AUDIO_BUFFER.try_lock() {
                             buf.extend_from_slice(data);
                         }
+
+                        // --- Real-time mono conversion + resampling for Whisper ---
+                        if let Some(ref rs_arc) = resampler_arc {
+                            // try_lock: if the mutex is contended (e.g., stop_capture flushing),
+                            // skip this chunk rather than blocking the audio thread.
+                            if let Ok(mut rs) = rs_arc.try_lock() {
+                                if !rs.failed {
+                                    // Convert to mono
+                                    let mono = to_mono(data, cb_channels);
+                                    // Append to accumulator
+                                    rs.mono_accumulator.extend_from_slice(&mono);
+                                    // Drain full chunks through resampler
+                                    if let Ok(mut wbuf) = WHISPER_BUFFER.try_lock() {
+                                        if !drain_resampler(&mut rs, &mut wbuf) {
+                                            rs.failed = true;
+                                        }
+                                    }
+                                    // If WHISPER_BUFFER lock failed, samples stay in accumulator
+                                    // and will be processed on the next callback.
+                                }
+                            }
+                        } else if cb_sample_rate == 16000 {
+                            // Already 16kHz: just convert to mono and append directly
+                            if let Ok(mut wbuf) = WHISPER_BUFFER.try_lock() {
+                                let mono = to_mono(data, cb_channels);
+                                wbuf.extend_from_slice(&mono);
+                            }
+                        }
+                        // If resampler_arc is None and sample_rate != 16kHz, real-time
+                        // resampling is unavailable; prepare_for_whisper will handle it.
                     },
                     |err| {
                         eprintln!("[capture] ERROR: Audio stream error: {}", err);
@@ -225,10 +371,74 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
     eprintln!("[capture] Sending stop signal...");
     let _ = handle.stop_sender.send(());
 
-    // Wait for thread to finish
+    // Wait for thread to finish (stream is dropped, no more callbacks)
     eprintln!("[capture] Waiting for audio thread to finish...");
     let _ = handle.thread_handle.join();
     eprintln!("[capture] Audio thread finished");
+
+    // Flush remaining samples in the resampler accumulator.
+    // The audio thread has ended so there are no more callbacks contending the lock.
+    let whisper_samples = {
+        let rs_opt = RESAMPLER_STATE.lock().unwrap().take();
+        match rs_opt {
+            Some(rs_arc) => {
+                let mut rs = rs_arc.lock().unwrap();
+                if rs.failed {
+                    eprintln!("[capture] Resampler was marked failed, no pre-processed whisper samples");
+                    None
+                } else {
+                    let mut wbuf = std::mem::take(&mut *WHISPER_BUFFER.lock().unwrap());
+                    // Flush any remaining samples in the accumulator via process_partial
+                    if !rs.mono_accumulator.is_empty() {
+                        let remainder: Vec<f32> = rs.mono_accumulator.drain(..).collect();
+                        eprintln!(
+                            "[capture] Flushing {} remaining mono samples through resampler",
+                            remainder.len()
+                        );
+                        match rs.resampler.process_partial(Some(&[&remainder]), None) {
+                            Ok(result) => {
+                                if let Some(channel) = result.first() {
+                                    wbuf.extend_from_slice(channel);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[capture] Resampler flush error: {}, discarding pre-processed buffer",
+                                    e
+                                );
+                                // Fall back to post-stop processing
+                                wbuf.clear();
+                            }
+                        }
+                    }
+                    if wbuf.is_empty() {
+                        None
+                    } else {
+                        eprintln!(
+                            "[capture] Pre-processed whisper buffer: {} samples ({:.2}s at 16kHz)",
+                            wbuf.len(),
+                            wbuf.len() as f32 / 16000.0
+                        );
+                        Some(wbuf)
+                    }
+                }
+            }
+            None => {
+                // No resampler was created. Check if we have direct 16kHz mono samples.
+                let wbuf = std::mem::take(&mut *WHISPER_BUFFER.lock().unwrap());
+                if wbuf.is_empty() {
+                    None
+                } else {
+                    eprintln!(
+                        "[capture] Pre-processed whisper buffer (passthrough): {} samples ({:.2}s at 16kHz)",
+                        wbuf.len(),
+                        wbuf.len() as f32 / 16000.0
+                    );
+                    Some(wbuf)
+                }
+            }
+        }
+    };
 
     // Reset audio level
     *CURRENT_AUDIO_LEVEL.lock().unwrap() = 0.0;
@@ -270,20 +480,42 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
         samples,
         sample_rate,
         channels,
+        whisper_samples,
     })
 }
 
 /// Resample audio to 16kHz mono for Whisper.
+/// If pre-processed whisper samples are available (from real-time resampling during
+/// recording), returns them directly — eliminating post-stop latency entirely.
+/// Otherwise falls back to the original mono conversion + resampling pipeline.
+///
 /// Takes ownership of AudioData to avoid cloning samples when already mono.
 /// Note: silence trimming removed — Silero VAD pre-filtering in whisper.rs
 /// handles speech/silence segmentation with much higher accuracy.
 pub fn prepare_for_whisper(audio: AudioData) -> Vec<f32> {
     eprintln!(
-        "[audio] prepare_for_whisper: input {} samples at {}Hz, {} channels",
+        "[audio] prepare_for_whisper: input {} samples at {}Hz, {} channels, whisper_samples={}",
         audio.samples.len(),
         audio.sample_rate,
-        audio.channels
+        audio.channels,
+        if audio.whisper_samples.is_some() { "yes" } else { "no" }
     );
+
+    // Fast path: use pre-processed 16kHz mono samples from real-time resampling
+    if let Some(whisper_samples) = audio.whisper_samples {
+        if !whisper_samples.is_empty() {
+            eprintln!(
+                "[audio] Using pre-processed whisper samples: {} samples ({:.2}s at 16kHz) -- zero post-stop latency",
+                whisper_samples.len(),
+                whisper_samples.len() as f32 / 16000.0
+            );
+            return whisper_samples;
+        }
+        eprintln!("[audio] Pre-processed whisper samples were empty, falling back to post-stop processing");
+    }
+
+    // Fallback path: original mono conversion + resampling
+    eprintln!("[audio] Falling back to post-stop mono conversion + resampling");
 
     if audio.samples.is_empty() {
         eprintln!("[audio] WARNING: Input audio buffer is empty!");
@@ -320,8 +552,6 @@ pub fn prepare_for_whisper(audio: AudioData) -> Vec<f32> {
 }
 
 fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    use rubato::{FastFixedIn, PolynomialDegree, Resampler};
-
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
     }
