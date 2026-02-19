@@ -11,7 +11,7 @@ mod dictionary;
 
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,9 +65,6 @@ fn setup_dictation_panel(app: &tauri::AppHandle) {
                 panel.set_floating_panel(true);
                 panel.set_hides_on_deactivate(false);
 
-                // Native background dragging is controlled by the widget.draggable setting
-                // and applied in refresh_panel_settings() on every show.
-
                 log::info!("Dictation window successfully converted to NSPanel for fullscreen overlay support");
             }
             Err(e) => {
@@ -102,11 +99,6 @@ fn refresh_panel_settings(app: &tauri::AppHandle) {
             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
         panel.set_collection_behaviour(behavior);
 
-        // Apply draggable setting: allow native window drag by clicking anywhere on background
-        let is_draggable = app.state::<AppState>().settings.lock()
-            .map(|s| s.widget.draggable)
-            .unwrap_or(false);
-        panel.set_moveable_by_window_background(is_draggable);
     }
 }
 
@@ -405,6 +397,39 @@ fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
 }
 
+/// Find the monitor containing the cursor, with a nearest-monitor fallback.
+/// The strict bounds check can fail in multi-monitor setups due to gaps in display
+/// arrangement, coordinate rounding, or macOS coordinate system quirks.
+fn find_monitor_for_cursor(
+    cursor: &tauri::PhysicalPosition<f64>,
+    monitors: &[tauri::window::Monitor],
+) -> Option<usize> {
+    let cx = cursor.x as i32;
+    let cy = cursor.y as i32;
+
+    // Try strict bounds first
+    if let Some(idx) = monitors.iter().position(|m| {
+        let pos = m.position();
+        let size = m.size();
+        cx >= pos.x && cx < pos.x + size.width as i32 &&
+        cy >= pos.y && cy < pos.y + size.height as i32
+    }) {
+        return Some(idx);
+    }
+
+    // Fallback: find the monitor whose center is nearest to the cursor.
+    // This handles gaps between monitors and edge-case coordinate mismatches.
+    monitors.iter().enumerate().min_by_key(|(_, m)| {
+        let pos = m.position();
+        let size = m.size();
+        let center_x = pos.x as i64 + size.width as i64 / 2;
+        let center_y = pos.y as i64 + size.height as i64 / 2;
+        let dx = cx as i64 - center_x;
+        let dy = cy as i64 - center_y;
+        dx * dx + dy * dy
+    }).map(|(idx, _)| idx)
+}
+
 /// Constants for dictation window dimensions (logical pixels, as defined in tauri.conf.json)
 const DICTATION_WINDOW_WIDTH: f64 = 340.0;
 const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
@@ -503,20 +528,13 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
     let cursor_pos = window.cursor_position()
         .map_err(|e| format!("Failed to get cursor position: {}", e))?;
 
-    // Find the monitor containing the cursor
-    let monitors = window.available_monitors()
-        .map_err(|e| format!("Failed to get monitors: {}", e))?;
+    // Find the monitor containing the cursor (with nearest-monitor fallback)
+    let monitors: Vec<_> = window.available_monitors()
+        .map_err(|e| format!("Failed to get monitors: {}", e))?
+        .into_iter().collect();
 
-    let target_monitor = monitors.into_iter().find(|m| {
-        let pos = m.position();
-        let size = m.size();
-        let cursor_x = cursor_pos.x as i32;
-        let cursor_y = cursor_pos.y as i32;
-        cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
-        cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
-    });
-
-    let monitor = target_monitor
+    let monitor = find_monitor_for_cursor(&cursor_pos, &monitors)
+        .map(|i| monitors[i].clone())
         .or_else(|| window.current_monitor().ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "No monitor found".to_string())?;
@@ -538,9 +556,6 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         window_center_y < screen_pos.y + screen_size.height as i32;
 
     if !window_on_same_monitor {
-        // Calculate target position using LOGICAL coordinates
-        // This is the key fix: instead of manually calculating physical positions,
-        // we use LogicalPosition and let Tauri handle scale factor conversions
         let target_pos = calculate_dictation_position(&monitor);
 
         // Hide window, reposition, then show - this prevents the flicker
@@ -568,23 +583,11 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
 
             if !is_draggable {
                 // Reposition to the monitor where the mouse is before showing
-                let target_monitor = if let Ok(cursor_pos) = window.cursor_position() {
-                    window.available_monitors().ok()
-                        .and_then(|monitors| {
-                            monitors.into_iter().find(|m| {
-                                let pos = m.position();
-                                let size = m.size();
-                                let cursor_x = cursor_pos.x as i32;
-                                let cursor_y = cursor_pos.y as i32;
-                                cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
-                                cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
-                            })
-                        })
-                } else {
-                    None
-                };
-
-                let monitor = target_monitor
+                let monitor = window.cursor_position().ok()
+                    .and_then(|cursor_pos| {
+                        let monitors: Vec<_> = window.available_monitors().ok()?.into_iter().collect();
+                        find_monitor_for_cursor(&cursor_pos, &monitors).map(|i| monitors[i].clone())
+                    })
                     .or_else(|| window.current_monitor().ok().flatten())
                     .or_else(|| window.primary_monitor().ok().flatten());
 
@@ -648,32 +651,15 @@ pub fn run() {
 
             // Position dictation window at bottom center of the monitor where mouse is
             if let Some(window) = app.get_webview_window("dictation") {
-                // Try to get cursor position and find the monitor containing it
-                let target_monitor = if let Ok(cursor_pos) = window.cursor_position() {
-                    // Find the monitor containing the cursor
-                    window.available_monitors().ok()
-                        .and_then(|monitors| {
-                            monitors.into_iter().find(|m| {
-                                let pos = m.position();
-                                let size = m.size();
-                                let cursor_x = cursor_pos.x as i32;
-                                let cursor_y = cursor_pos.y as i32;
-                                cursor_x >= pos.x && cursor_x < pos.x + size.width as i32 &&
-                                cursor_y >= pos.y && cursor_y < pos.y + size.height as i32
-                            })
-                        })
-                } else {
-                    None
-                };
-
-                // Fall back to current/primary monitor if cursor detection fails
-                let monitor = target_monitor
+                let monitor = window.cursor_position().ok()
+                    .and_then(|cursor_pos| {
+                        let monitors: Vec<_> = window.available_monitors().ok()?.into_iter().collect();
+                        find_monitor_for_cursor(&cursor_pos, &monitors).map(|i| monitors[i].clone())
+                    })
                     .or_else(|| window.current_monitor().ok().flatten())
                     .or_else(|| window.primary_monitor().ok().flatten());
 
                 if let Some(monitor) = monitor {
-                    // Use LogicalPosition for proper centering on any monitor
-                    // This handles scale factor differences automatically
                     let target_pos = calculate_dictation_position(&monitor);
                     window.set_position(target_pos).ok();
                     window.show().ok();
@@ -704,7 +690,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .show_menu_on_left_click(false)
+                .show_menu_on_left_click(true)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "dashboard" => {
                         open_dashboard_window(app);
@@ -722,17 +708,6 @@ pub fn run() {
                         app.exit(0);
                     }
                     _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        toggle_dictation_window(app);
-                    }
                 })
                 .build(app)?;
 
