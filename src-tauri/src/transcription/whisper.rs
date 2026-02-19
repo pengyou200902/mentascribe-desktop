@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
+use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperState, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 
 use super::{CoremlStatus, MetalStatus, ModelInfo};
 
@@ -25,6 +25,17 @@ static MODEL_CACHE: Lazy<Mutex<ModelCache>> = Lazy::new(|| {
         model_path: PathBuf::new(),
     })
 });
+
+// Pre-created WhisperState cache. After each transcription, we spawn a background
+// thread to create the next WhisperState so it's ready immediately when the user
+// stops their next recording. This saves 50-200ms (state allocation is 200-400MB).
+// WhisperState holds its own Arc<WhisperInnerContext> so the model stays alive.
+struct CachedWhisperState {
+    state: WhisperState,
+    model_size: String,
+}
+
+static STATE_CACHE: Lazy<Mutex<Option<CachedWhisperState>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Error, Debug)]
 pub enum WhisperError {
@@ -606,11 +617,10 @@ pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
         load_elapsed.as_secs_f64()
     );
 
-    // Call create_state() once to trigger CoreML first-run compilation.
-    // This can take 5-30s on first run for a device, but is fast on subsequent runs.
-    // The state is discarded — we only want the side effect of CoreML compilation.
+    // Create state to trigger CoreML first-run compilation, then cache it
+    // for the first transcription (saves 50-200ms on first use).
     let state_start = std::time::Instant::now();
-    let _state = ctx
+    let preload_state = ctx
         .create_state()
         .map_err(|e| {
             WhisperError::TranscriptionError(format!(
@@ -620,10 +630,16 @@ pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
         })?;
     let state_elapsed = state_start.elapsed();
     log::info!(
-        "preload_model: state created (CoreML warmup) in {:.2}s",
+        "preload_model: state created (CoreML warmup) in {:.2}s, caching for first transcription",
         state_elapsed.as_secs_f64()
     );
-    drop(_state);
+    // Cache the state for the first transcription instead of discarding it
+    if let Ok(mut state_cache) = STATE_CACHE.lock() {
+        *state_cache = Some(CachedWhisperState {
+            state: preload_state,
+            model_size: model_size.to_string(),
+        });
+    }
 
     // Store in cache (Arc-wrapped for lock-free inference)
     cache.context = Some(Arc::new(ctx));
@@ -775,14 +791,31 @@ fn run_whisper(
         Arc::clone(cache.context.as_ref().unwrap())
     }; // <-- lock released here
 
+    // Try to use a pre-created state from the cache (saves 50-200ms).
+    // Only use it if the model matches — model changes invalidate the cache.
     let state_start = std::time::Instant::now();
-    let mut state = ctx
-        .create_state()
-        .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
-    log::info!(
-        "Whisper state created in {:.2}s",
-        state_start.elapsed().as_secs_f64()
-    );
+    let mut state = {
+        let cached = STATE_CACHE.lock().ok().and_then(|mut guard| {
+            guard.as_ref().map(|c| c.model_size == model_size).unwrap_or(false)
+                .then(|| guard.take().unwrap().state)
+        });
+        if let Some(s) = cached {
+            log::info!(
+                "Using pre-created WhisperState from cache in {:.4}s",
+                state_start.elapsed().as_secs_f64()
+            );
+            s
+        } else {
+            let s = ctx
+                .create_state()
+                .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+            log::info!(
+                "Whisper state created (no cache hit) in {:.2}s",
+                state_start.elapsed().as_secs_f64()
+            );
+            s
+        }
+    };
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -948,6 +981,20 @@ fn run_whisper(
             "Whisper transcription complete in {:.2}s -- hallucination suppressed (0 chars)",
             total_elapsed.as_secs_f64()
         );
+        // Still pre-create state for next transcription before returning
+        drop(state);
+        let bg_ctx = Arc::clone(&ctx);
+        let bg_model_size = model_size.to_string();
+        std::thread::spawn(move || {
+            if let Ok(new_state) = bg_ctx.create_state() {
+                if let Ok(mut cache) = STATE_CACHE.lock() {
+                    *cache = Some(CachedWhisperState {
+                        state: new_state,
+                        model_size: bg_model_size,
+                    });
+                }
+            }
+        });
         return Ok(String::new());
     }
 
@@ -962,6 +1009,34 @@ fn run_whisper(
         },
         result.len()
     );
+
+    // Drop the used state (contains stale inference data) and pre-create the next
+    // one in a background thread so it's ready for the next transcription.
+    // This moves the 50-200ms state allocation off the critical path.
+    drop(state);
+    let bg_ctx = Arc::clone(&ctx);
+    let bg_model_size = model_size.to_string();
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        match bg_ctx.create_state() {
+            Ok(new_state) => {
+                if let Ok(mut cache) = STATE_CACHE.lock() {
+                    *cache = Some(CachedWhisperState {
+                        state: new_state,
+                        model_size: bg_model_size.clone(),
+                    });
+                    log::info!(
+                        "Pre-created WhisperState in background in {:.2}s (model={})",
+                        start.elapsed().as_secs_f64(),
+                        bg_model_size
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("Background WhisperState pre-creation failed: {}", e);
+            }
+        }
+    });
 
     Ok(result)
 }
