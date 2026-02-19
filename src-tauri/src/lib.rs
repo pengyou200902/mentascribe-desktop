@@ -293,10 +293,15 @@ fn update_settings(
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let old_hotkey = {
+    let (old_hotkey, old_draggable) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        settings.hotkey.key.clone()
+        (settings.hotkey.key.clone(), settings.widget.draggable)
     };
+
+    let new_draggable = new_settings.widget.draggable;
+    if old_draggable != new_draggable {
+        eprintln!("[settings] DRAGGABLE CHANGED: {} -> {}", old_draggable, new_draggable);
+    }
 
     let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
     *settings = new_settings.clone();
@@ -397,6 +402,254 @@ fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
 }
 
+/// Frontend debug log forwarding — prints to terminal so we can see drag events
+#[tauri::command]
+fn frontend_log(msg: String) {
+    eprintln!("[frontend] {}", msg);
+}
+
+/// Native drag state — stored in a static so NSEvent monitor blocks can access it.
+/// All coordinates are in AppKit space (bottom-left origin, Y increases upward).
+#[cfg(target_os = "macos")]
+struct NativeDragState {
+    initial_mouse_x: f64,
+    initial_mouse_y: f64,
+    initial_origin_x: f64,
+    initial_origin_y: f64,
+    panel_ptr: usize,        // NSPanel id stored as usize (for Send)
+    monitors: [usize; 4],    // [local_drag, global_drag, local_mouseup, global_mouseup]
+    active: bool,            // false = drag ended, handlers become no-ops
+}
+
+// SAFETY: Fields are only accessed from the main thread (monitor handlers + tauri commands)
+#[cfg(target_os = "macos")]
+unsafe impl Send for NativeDragState {}
+
+#[cfg(target_os = "macos")]
+static NATIVE_DRAG_STATE: std::sync::Mutex<Option<NativeDragState>> = std::sync::Mutex::new(None);
+
+/// GCD FFI for deferring work to next run loop iteration.
+/// Note: &_dispatch_main_q as *const _ is a C macro expanding to &_dispatch_main_q,
+/// so we link the actual symbol directly.
+#[cfg(target_os = "macos")]
+extern "C" {
+    static _dispatch_main_q: std::os::raw::c_void;
+    fn dispatch_async_f(
+        queue: *const std::os::raw::c_void,
+        context: *mut std::os::raw::c_void,
+        work: extern "C" fn(*mut std::os::raw::c_void),
+    );
+}
+
+/// Callback for dispatch_async_f — removes monitors on the NEXT run loop iteration.
+/// Apple docs: "It is NOT safe to remove a monitor from within the handler block."
+#[cfg(target_os = "macos")]
+extern "C" fn deferred_remove_monitors(_ctx: *mut std::os::raw::c_void) {
+    use cocoa::base::id;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    if let Ok(mut guard) = NATIVE_DRAG_STATE.lock() {
+        if let Some(state) = guard.take() {
+            for &mon in &state.monitors {
+                if mon != 0 {
+                    unsafe {
+                        let _: () = msg_send![class!(NSEvent), removeMonitor: mon as id];
+                    }
+                }
+            }
+            eprintln!("[native_drag] Monitors removed (deferred)");
+        }
+    }
+}
+
+/// Remove native drag event monitors and clear state.
+/// Safe to call from outside handlers (e.g. start of a new drag).
+#[cfg(target_os = "macos")]
+fn stop_native_drag_inner() {
+    use cocoa::base::id;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    if let Ok(mut guard) = NATIVE_DRAG_STATE.lock() {
+        if let Some(state) = guard.take() {
+            for &mon in &state.monitors {
+                if mon != 0 {
+                    unsafe {
+                        let _: () = msg_send![class!(NSEvent), removeMonitor: mon as id];
+                    }
+                }
+            }
+            eprintln!("[native_drag] Drag stopped, monitors removed");
+        }
+    }
+}
+
+/// Handle a drag/mouseUp event from an NSEvent monitor.
+/// Called from both local and global monitor blocks.
+/// Returns true if drag ended (mouseUp).
+#[cfg(target_os = "macos")]
+fn handle_native_drag_event(event_type: u64) {
+    use cocoa::base::id;
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    if event_type == 6 {
+        // NSLeftMouseDragged — move panel to follow mouse
+        if let Ok(guard) = NATIVE_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_ref() {
+                if !state.active { return; }
+                unsafe {
+                    let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+                    let dx = mouse.x - state.initial_mouse_x;
+                    let dy = mouse.y - state.initial_mouse_y;
+                    let new_origin = NSPoint::new(
+                        state.initial_origin_x + dx,
+                        state.initial_origin_y + dy,
+                    );
+                    let panel = state.panel_ptr as *mut objc::runtime::Object;
+                    let _: () = msg_send![panel, setFrameOrigin: new_origin];
+                }
+            }
+        }
+    } else if event_type == 2 {
+        // NSLeftMouseUp — mark drag ended, defer monitor removal
+        if let Ok(mut guard) = NATIVE_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_mut() {
+                state.active = false;
+            }
+        }
+        // IMPORTANT: Cannot removeMonitor from inside its handler block!
+        // Defer to the next run loop iteration via GCD.
+        unsafe {
+            dispatch_async_f(
+                &_dispatch_main_q as *const _,
+                std::ptr::null_mut(),
+                deferred_remove_monitors,
+            );
+        }
+        eprintln!("[native_drag] MouseUp — deferred cleanup scheduled");
+    }
+}
+
+/// Start native drag — installs NSEvent monitors that track mouse movement entirely
+/// in AppKit coordinate space, bypassing JavaScript's broken screenX/screenY on mixed-DPI.
+///
+/// Called from JS mousedown. The monitors handle all movement and auto-cleanup on mouseup.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
+    use cocoa::base::id;
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::ManagerExt;
+    use tauri_nspanel::block::ConcreteBlock;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect { origin: NSPoint, size: NSPoint }
+
+    // Clean up any existing drag first (safe — called outside handler)
+    stop_native_drag_inner();
+
+    let panel = app.get_webview_panel("dictation")
+        .map_err(|e| format!("{:?}", e))?;
+
+    unsafe {
+        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let frame: NSRect = msg_send![&*panel, frame];
+        // Get the actual NSPanel id pointer via [panel self].
+        // IMPORTANT: &*panel may be a reference into the Rust WebviewPanel struct,
+        // which gets freed when `panel` drops. [self] returns the underlying ObjC
+        // object pointer that AppKit retains independently.
+        let ns_panel: id = msg_send![&*panel, self];
+        let panel_ptr = ns_panel as usize;
+
+        eprintln!("[native_drag] Starting: mouse=({:.1},{:.1}), origin=({:.1},{:.1}), panel_ptr=0x{:x}",
+            mouse.x, mouse.y, frame.origin.x, frame.origin.y, panel_ptr);
+
+        // Store initial state (monitors will be updated after installation)
+        *NATIVE_DRAG_STATE.lock().map_err(|e| e.to_string())? = Some(NativeDragState {
+            initial_mouse_x: mouse.x,
+            initial_mouse_y: mouse.y,
+            initial_origin_x: frame.origin.x,
+            initial_origin_y: frame.origin.y,
+            panel_ptr,
+            monitors: [0; 4],
+            active: true,
+        });
+
+        // Use separate monitors for drag vs mouseUp to avoid calling msg_send!
+        // inside the block (the objc crate's debug verification panics inside
+        // extern "C" block invoke functions, which can't unwind).
+        let drag_mask: u64 = 1 << 6;   // NSEventMaskLeftMouseDragged
+        let mouseup_mask: u64 = 1 << 2; // NSEventMaskLeftMouseUp
+
+        // Drag handler — moves panel (local monitor returns event, global returns void)
+        let local_drag = ConcreteBlock::new(|event: id| -> id {
+            handle_native_drag_event(6); // NSLeftMouseDragged
+            event
+        });
+        let local_drag = local_drag.copy();
+
+        let local_drag_monitor: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: drag_mask
+            handler: &*local_drag
+        ];
+
+        let global_drag = ConcreteBlock::new(|_event: id| {
+            handle_native_drag_event(6);
+        });
+        let global_drag = global_drag.copy();
+
+        let global_drag_monitor: id = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: drag_mask
+            handler: &*global_drag
+        ];
+
+        // MouseUp handler — ends drag
+        let local_mouseup = ConcreteBlock::new(|event: id| -> id {
+            handle_native_drag_event(2); // NSLeftMouseUp
+            event
+        });
+        let local_mouseup = local_mouseup.copy();
+
+        let local_mouseup_monitor: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: mouseup_mask
+            handler: &*local_mouseup
+        ];
+
+        let global_mouseup = ConcreteBlock::new(|_event: id| {
+            handle_native_drag_event(2);
+        });
+        let global_mouseup = global_mouseup.copy();
+
+        let global_mouseup_monitor: id = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: mouseup_mask
+            handler: &*global_mouseup
+        ];
+
+        // Update state with monitor IDs
+        if let Ok(mut guard) = NATIVE_DRAG_STATE.lock() {
+            if let Some(state) = guard.as_mut() {
+                state.monitors = [
+                    local_drag_monitor as usize,
+                    global_drag_monitor as usize,
+                    local_mouseup_monitor as usize,
+                    global_mouseup_monitor as usize,
+                ];
+            }
+        }
+
+        eprintln!("[native_drag] Monitors installed: local_drag={:?}, global_drag={:?}, local_mouseup={:?}, global_mouseup={:?}",
+            local_drag_monitor, global_drag_monitor, local_mouseup_monitor, global_mouseup_monitor);
+    }
+
+    Ok(())
+}
+
 /// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json)
 const DICTATION_WINDOW_WIDTH: f64 = 340.0;
 const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
@@ -433,7 +686,10 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
     }
 
     let panel = app.get_webview_panel("dictation")
-        .map_err(|e| format!("{:?}", e))?;
+        .map_err(|e| {
+            eprintln!("[native_pos] ERROR: Failed to get panel: {:?}", e);
+            format!("{:?}", e)
+        })?;
 
     unsafe {
         // Get cursor position in AppKit coordinates (bottom-left origin, y increases upward)
@@ -445,6 +701,7 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
 
         let mut target_screen_frame: Option<NSRect> = None;
         let mut target_visible_frame: Option<NSRect> = None;
+        let mut target_screen_idx: usize = 0;
 
         for i in 0..count {
             let screen: id = msg_send![screens, objectAtIndex: i];
@@ -454,12 +711,16 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
                 let visible: NSRect = msg_send![screen, visibleFrame];
                 target_screen_frame = Some(frame);
                 target_visible_frame = Some(visible);
+                target_screen_idx = i;
                 break;
             }
         }
 
         let screen_frame = target_screen_frame
-            .ok_or_else(|| "No screen found for cursor".to_string())?;
+            .ok_or_else(|| {
+                eprintln!("[native_pos] ERROR: No screen found for cursor at ({:.1}, {:.1}), {} screens available", mouse_loc.x, mouse_loc.y, count);
+                "No screen found for cursor".to_string()
+            })?;
         let visible_frame = target_visible_frame.unwrap();
 
         if only_if_different_monitor {
@@ -477,6 +738,10 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
             if on_same_screen {
                 return Ok(false);
             }
+            eprintln!("[native_pos] MOVING: window center ({:.1}, {:.1}) NOT on screen {} (origin: {:.1},{:.1} size: {:.1}x{:.1})",
+                cx, cy, target_screen_idx,
+                screen_frame.origin.x, screen_frame.origin.y,
+                screen_frame.size.x, screen_frame.size.y);
         }
 
         // Calculate bottom-center in AppKit coordinates.
@@ -484,6 +749,11 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
         // In AppKit, origin.y is the bottom edge, so we add DOCK_OFFSET above it.
         let x = visible_frame.origin.x + (visible_frame.size.x - DICTATION_WINDOW_WIDTH) / 2.0;
         let y = visible_frame.origin.y + DOCK_OFFSET;
+
+        eprintln!("[native_pos] Positioning on screen {} — mouse: ({:.1}, {:.1}), target: ({:.1}, {:.1}), visible: origin({:.1},{:.1}) size({:.1}x{:.1})",
+            target_screen_idx, mouse_loc.x, mouse_loc.y, x, y,
+            visible_frame.origin.x, visible_frame.origin.y,
+            visible_frame.size.x, visible_frame.size.y);
 
         let new_origin = NSPoint::new(x, y);
         let _: () = msg_send![&*panel, setFrameOrigin: new_origin];
@@ -544,6 +814,14 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         .map(|s| s.widget.draggable)
         .unwrap_or(false);
     if is_draggable {
+        // Log once per second (this is called every 150ms, so ~7 calls/sec)
+        // Use a simple static counter to throttle
+        use std::sync::atomic::AtomicU64;
+        static SKIP_COUNT: AtomicU64 = AtomicU64::new(0);
+        let count = SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count % 40 == 0 {
+            eprintln!("[reposition] SKIPPED (draggable=true), skip count: {}", count);
+        }
         return Ok(false);
     }
 
@@ -600,13 +878,18 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
 
 fn toggle_dictation_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("dictation") {
-        if window.is_visible().unwrap_or(false) {
+        let is_visible = window.is_visible().unwrap_or(false);
+        eprintln!("[toggle] toggle_dictation_window called, currently visible: {}", is_visible);
+
+        if is_visible {
+            eprintln!("[toggle] Hiding dictation window");
             window.hide().ok();
         } else {
             // Check if widget is draggable - if so, skip repositioning to preserve user's position
             let is_draggable = app.state::<AppState>().settings.lock()
                 .map(|s| s.widget.draggable)
                 .unwrap_or(false);
+            eprintln!("[toggle] Showing dictation window, draggable={}", is_draggable);
 
             window.show().ok();
             // Re-apply panel settings after show (macOS may reset them)
@@ -616,10 +899,18 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 // Position on cursor's monitor after show (panel must exist)
                 #[cfg(target_os = "macos")]
                 {
-                    native_position_on_cursor_monitor(app, false).ok();
+                    eprintln!("[toggle] Repositioning to cursor monitor (draggable=false)");
+                    match native_position_on_cursor_monitor(app, false) {
+                        Ok(moved) => eprintln!("[toggle] Position result: moved={}", moved),
+                        Err(e) => eprintln!("[toggle] Position ERROR: {}", e),
+                    }
                 }
+            } else {
+                eprintln!("[toggle] Skipping reposition (draggable=true, preserving user position)");
             }
         }
+    } else {
+        eprintln!("[toggle] ERROR: dictation window not found!");
     }
 }
 
@@ -755,6 +1046,9 @@ pub fn run() {
             remove_dictionary_entry,
             // Window positioning
             reposition_to_mouse_monitor,
+            start_native_drag,
+            // Debug
+            frontend_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

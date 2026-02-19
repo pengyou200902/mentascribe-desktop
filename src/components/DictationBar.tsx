@@ -1,6 +1,6 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PhysicalPosition } from '@tauri-apps/api/dpi';
+import { invoke } from '@tauri-apps/api/core';
 
 interface DictationBarProps {
   isRecording: boolean;
@@ -25,6 +25,13 @@ export const DictationBar: FC<DictationBarProps> = ({
   const prevLevelsRef = useRef<number[]>(Array(9).fill(0.3));
   const targetHeightsRef = useRef<number[]>(Array(9).fill(0.3));
   const lastUpdateRef = useRef(0);
+  const prevDraggableRef = useRef(draggable);
+
+  // Log draggable prop changes — forward to Rust terminal
+  useEffect(() => {
+    invoke('frontend_log', { msg: `[DictationBar] draggable prop = ${draggable} (prev: ${prevDraggableRef.current})` }).catch(() => {});
+    prevDraggableRef.current = draggable;
+  }, [draggable]);
 
   // Determine state
   const isActive = isRecording || isProcessing;
@@ -133,41 +140,22 @@ export const DictationBar: FC<DictationBarProps> = ({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
-  // Manual window dragging — bypasses NSPanel/startDragging issues entirely.
-  // Captures initial window position + mouse screen coords, then moves window on mousemove.
-  const handleMouseDown = useCallback(async (e: React.MouseEvent) => {
+  // Helper to forward logs to Rust terminal (fire-and-forget)
+  const flog = useCallback((msg: string) => {
+    invoke('frontend_log', { msg }).catch(() => {});
+  }, []);
+
+  // Native drag — all mouse tracking happens in Rust via NSEvent monitors.
+  // JS just signals drag start; [NSEvent mouseLocation] handles coordinates
+  // reliably across mixed-DPI monitors (bypasses WKWebView screenX/Y bug).
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!draggable || e.button !== 0) return;
     e.preventDefault();
-
-    const startScreenX = e.screenX;
-    const startScreenY = e.screenY;
-    const scaleFactor = window.devicePixelRatio;
-    const win = getCurrentWindow();
-
-    let startPos: { x: number; y: number };
-    try {
-      startPos = await win.outerPosition();
-    } catch {
-      return;
-    }
-
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.screenX - startScreenX;
-      const dy = ev.screenY - startScreenY;
-      win.setPosition(new PhysicalPosition(
-        startPos.x + Math.round(dx * scaleFactor),
-        startPos.y + Math.round(dy * scaleFactor),
-      ));
-    };
-
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [draggable]);
+    flog('[drag] Starting native drag via NSEvent monitors');
+    invoke('start_native_drag').catch((err) => {
+      flog(`[drag] ERROR: start_native_drag failed: ${err}`);
+    });
+  }, [draggable, flog]);
 
   // Render idle state - simple horizontal dash
   const renderIdle = () => (

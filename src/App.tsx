@@ -148,18 +148,29 @@ function App() {
   useEffect(() => {
     if (windowType !== 'dictation') return;
 
+    let pollCount = 0;
     const checkMouseMonitor = async () => {
       try {
-        await invoke('reposition_to_mouse_monitor');
+        const moved = await invoke<boolean>('reposition_to_mouse_monitor');
+        pollCount++;
+        if (moved) {
+          console.log(`[poll] reposition_to_mouse_monitor returned TRUE (moved) at poll #${pollCount}`);
+        }
+        // Log draggable state every ~3 seconds
+        if (pollCount % 20 === 0) {
+          console.log(`[poll] poll #${pollCount}, draggable=${settingsRef.current?.widget?.draggable}`);
+        }
       } catch (err) {
-        // Silently ignore errors (window might not be visible, etc.)
+        console.error(`[poll] reposition_to_mouse_monitor ERROR:`, err);
       }
     };
 
     // Check every 150ms for monitor changes (fast enough to feel responsive)
     const intervalId = setInterval(checkMouseMonitor, 150);
+    console.log(`[poll] Started 150ms monitor tracking, draggable=${settings?.widget?.draggable}`);
 
     return () => {
+      console.log(`[poll] Stopped 150ms monitor tracking`);
       clearInterval(intervalId);
     };
   }, [windowType]);
@@ -256,6 +267,12 @@ function App() {
     );
   }
 
+  // Log when draggable setting changes
+  const draggableValue = settings?.widget?.draggable ?? false;
+  useEffect(() => {
+    console.log(`[app] draggable prop changed to: ${draggableValue}`);
+  }, [draggableValue]);
+
   // Main dictation bar overlay
   return (
     <div className="dictation-container">
@@ -265,7 +282,7 @@ function App() {
         audioLevel={audioLevel}
         error={error}
         statusOverride={isDownloadingModel ? 'Downloading model...' : undefined}
-        draggable={settings?.widget?.draggable ?? false}
+        draggable={draggableValue}
       />
     </div>
   );
