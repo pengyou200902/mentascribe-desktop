@@ -46,7 +46,12 @@ fn get_models_dir() -> PathBuf {
 }
 
 fn get_model_path(size: &str) -> PathBuf {
-    get_models_dir().join(format!("ggml-{}.bin", size))
+    let filename = if size == "large" {
+        "ggml-large-v3.bin".to_string()
+    } else {
+        format!("ggml-{}.bin", size)
+    };
+    get_models_dir().join(filename)
 }
 
 /// Get the CoreML encoder model directory name for a given model size.
@@ -62,6 +67,32 @@ fn coreml_encoder_name(size: &str) -> String {
 /// Check if the CoreML encoder model is downloaded for a given size.
 pub fn is_coreml_downloaded(size: &str) -> bool {
     get_models_dir().join(coreml_encoder_name(size)).is_dir()
+}
+
+/// Approximate GGML model download size in bytes for a given model size.
+/// Used as a fallback when Content-Length is absent (chunked transfer encoding).
+fn ggml_size_bytes(size: &str) -> u64 {
+    match size {
+        "tiny" => 75_000_000,
+        "base" => 142_000_000,
+        "small" => 466_000_000,
+        "medium" => 1_500_000_000,
+        "large" => 2_900_000_000,
+        _ => 0,
+    }
+}
+
+/// Approximate CoreML encoder zip download size in bytes for a given model size.
+/// Used as a fallback when Content-Length is absent (chunked transfer encoding).
+fn coreml_size_bytes(size: &str) -> u64 {
+    match size {
+        "tiny" => 42_000_000,
+        "base" => 78_000_000,
+        "small" => 244_000_000,
+        "medium" => 776_000_000,
+        "large" => 1_550_000_000,
+        _ => 0,
+    }
 }
 
 /// Approximate CoreML encoder zip download sizes (MB) from HuggingFace.
@@ -161,7 +192,7 @@ pub async fn download_model(
         )));
     }
 
-    let total_size = response.content_length().unwrap_or(0);
+    let total_size = response.content_length().unwrap_or_else(|| ggml_size_bytes(size));
     let mut downloaded: u64 = 0;
     let mut last_percent: u8 = 0;
     let mut file =
@@ -252,7 +283,7 @@ pub async fn download_coreml_model(
         )));
     }
 
-    let total_size = response.content_length().unwrap_or(0);
+    let total_size = response.content_length().unwrap_or_else(|| coreml_size_bytes(size));
     let mut downloaded: u64 = 0;
     let mut last_percent: u8 = 0;
     let mut file = std::fs::File::create(&zip_path)
