@@ -1,260 +1,253 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-02-18
+**Analysis Date:** 2026-02-19
 
 ## Directory Layout
 
 ```
 mentascribe-desktop/
-├── src/                        # React/TypeScript frontend
-│   ├── App.tsx                 # Main app router (window type detection)
-│   ├── main.tsx                # React root entry point
-│   ├── components/             # React components
-│   │   ├── DictationBar.tsx    # Floating overlay widget with waveform
-│   │   ├── Settings.tsx        # Settings form component
-│   │   ├── History.tsx         # Quick history viewer
-│   │   ├── dashboard/          # Full-featured dashboard (multi-page)
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── HomePage.tsx
-│   │   │   ├── HistoryPage.tsx
-│   │   │   ├── DictionaryPage.tsx
-│   │   │   ├── SettingsPage.tsx
-│   │   │   └── Sidebar.tsx
-│   │   └── [MenuBar, TranscriptionOverlay]
-│   ├── lib/                    # Zustand stores and utilities
-│   │   ├── store.ts            # Main settings store
-│   │   ├── historyStore.ts     # History pagination store
-│   │   ├── dictionaryStore.ts  # Dictionary store
-│   │   ├── statsStore.ts       # Stats store
-│   │   ├── tauri.ts            # Tauri API wrappers
-│   │   └── theme.tsx           # Theme context/utilities
-│   ├── hooks/                  # Custom React hooks
-│   ├── types/                  # TypeScript interfaces
-│   │   └── index.ts
-│   ├── icons/                  # Icon components (SVG)
-│   └── styles/                 # CSS/Tailwind globals
+├── src/                          # React/TypeScript frontend (Vite)
+│   ├── components/               # React components
+│   │   ├── DictationBar.tsx      # Overlay widget (recording, waveform, status)
+│   │   ├── Settings.tsx          # Settings modal
+│   │   ├── History.tsx           # History view
+│   │   ├── TranscriptionOverlay.tsx
+│   │   ├── MenuBar.tsx
+│   │   └── dashboard/            # Dashboard window pages
+│   │       ├── Dashboard.tsx     # Main dashboard router
+│   │       ├── HomePage.tsx      # Home/stats page
+│   │       ├── HistoryPage.tsx   # Transcription history
+│   │       ├── DictionaryPage.tsx # Custom replacements
+│   │       ├── SettingsPage.tsx  # Full settings UI
+│   │       └── Sidebar.tsx       # Dashboard navigation
+│   ├── lib/                      # Utilities and stores
+│   │   ├── store.ts             # Zustand settings store
+│   │   ├── historyStore.ts      # Transcription history store
+│   │   ├── dictionaryStore.ts   # Dictionary entries store
+│   │   ├── statsStore.ts        # Statistics store
+│   │   ├── tauri.ts             # Tauri API wrapper/types
+│   │   └── theme.tsx            # Theme provider (dark/light)
+│   ├── types/                    # TypeScript interfaces
+│   │   └── index.ts             # Shared types (DailyStats, TranscriptionEntry, etc.)
+│   ├── styles/                   # CSS
+│   │   └── globals.css          # Tailwind + global styles
+│   ├── icons/                    # SVG icons
+│   ├── App.tsx                   # Root component (route dispatcher)
+│   └── main.tsx                  # React entry point
 │
-├── src-tauri/                  # Rust backend (Tauri v2)
+├── src-tauri/                    # Rust backend (Tauri v2)
 │   ├── src/
-│   │   ├── main.rs             # Binary entry point (minimal)
-│   │   ├── lib.rs              # App initialization, commands, main loop
-│   │   ├── audio/              # Audio capture and processing
-│   │   │   ├── mod.rs
-│   │   │   ├── capture.rs      # Cross-platform audio capture (cpal)
-│   │   │   └── vad.rs          # Voice activity detection
-│   │   ├── transcription/       # Speech-to-text providers
-│   │   │   ├── mod.rs
-│   │   │   ├── whisper.rs      # Local Whisper (whisper-rs crate)
-│   │   │   └── cloud.rs        # Cloud provider adapters
-│   │   ├── injection/          # Text injection into active app
-│   │   │   └── mod.rs          # Platform-specific implementations
-│   │   ├── hotkey/             # Global hotkey registration
-│   │   │   └── mod.rs
-│   │   ├── settings/           # Settings management and persistence
-│   │   │   └── mod.rs
-│   │   ├── history/            # Transcription history storage
-│   │   │   └── mod.rs
-│   │   ├── dictionary/         # Custom word replacements
-│   │   │   └── mod.rs
-│   │   ├── text/               # Text post-processing
-│   │   │   └── mod.rs
-│   │   ├── stats/              # Usage statistics
-│   │   │   └── mod.rs
-│   │   └── api/                # External API integration
-│   │       ├── mod.rs
-│   │       └── client.rs
-│   │
-│   ├── Cargo.toml              # Rust dependencies and build config
-│   ├── tauri.conf.json         # Tauri app configuration
-│   ├── build.rs                # Tauri build script
-│   ├── Info.plist              # macOS app metadata
-│   ├── capabilities/           # Tauri security capabilities
-│   ├── gen/                    # Generated schemas
-│   ├── icons/                  # App icons (PNG, ICNS, ICO)
-│   └── target/                 # Build output (excluded from repo)
+│   │   ├── lib.rs               # Main app setup, Tauri commands, window management
+│   │   ├── main.rs              # Rust entry point (calls run() from lib.rs)
+│   │   ├── audio/
+│   │   │   ├── mod.rs           # Audio module exports
+│   │   │   ├── capture.rs       # CPAL audio capture, levels, VAD hook
+│   │   │   └── vad.rs           # Voice activity detection (stub/placeholder)
+│   │   ├── transcription/
+│   │   │   ├── mod.rs           # ModelInfo, CoremlStatus types
+│   │   │   ├── whisper.rs       # Whisper model loading, caching, transcription
+│   │   │   └── cloud.rs         # Cloud transcription providers (stub)
+│   │   ├── settings/
+│   │   │   └── mod.rs           # UserSettings struct, load/save to JSON
+│   │   ├── hotkey/
+│   │   │   └── mod.rs           # Global hotkey registration via global-hotkey
+│   │   ├── injection/
+│   │   │   └── mod.rs           # Text injection via enigo (keyboard/clipboard)
+│   │   ├── text/
+│   │   │   └── mod.rs           # Text post-processing (auto-capitalize)
+│   │   ├── history/
+│   │   │   └── mod.rs           # Transcription history persistence (JSON)
+│   │   ├── dictionary/
+│   │   │   └── mod.rs           # Custom word replacements (JSON)
+│   │   ├── stats/
+│   │   │   └── mod.rs           # Usage statistics tracking (JSON)
+│   │   ├── api/
+│   │   │   ├── mod.rs           # Auth types
+│   │   │   └── client.rs        # API client (placeholder)
+│   │   └── gen/                 # Auto-generated by Tauri
+│   │       └── schemas/
+│   ├── Cargo.toml                # Rust dependencies
+│   ├── Cargo.lock
+│   ├── build.rs                  # Tauri build script
+│   ├── tauri.conf.json           # Tauri configuration (windows, security, plugins)
+│   ├── capabilities/             # Tauri v2 security capabilities
+│   ├── icons/                    # App icons (macOS, Windows, Linux)
+│   └── target/                   # Build artifacts (excluded from repo)
 │
-├── dist/                       # Built frontend (generated)
-├── node_modules/               # npm dependencies
-├── package.json                # Frontend dependencies
-├── tsconfig.json               # TypeScript config
-├── tsconfig.node.json          # TypeScript config for Node tools
-├── vite.config.ts              # Vite bundler config
-├── tailwind.config.js          # Tailwind CSS config
-├── postcss.config.js           # PostCSS config
-├── .planning/                  # GSD planning documentation
-└── .gitignore
+├── .planning/
+│   └── codebase/                 # Codebase analysis documents
+│
+├── dist/                         # Built frontend assets (dev/preview)
+├── docs/                         # Documentation
+├── index.html                    # HTML entry point
+├── package.json                  # Frontend dependencies (Node.js)
+├── tsconfig.json                 # TypeScript config (frontend)
+├── tsconfig.node.json            # TypeScript config (Vite, backend tooling)
+├── vite.config.ts                # Vite build config
+├── tailwind.config.js            # Tailwind CSS config
+├── postcss.config.js             # PostCSS config (Tailwind)
+├── .eslintrc*                    # ESLint config
+└── README.md
 ```
 
 ## Directory Purposes
 
 **`src/`:**
 - Purpose: React/TypeScript frontend application
-- Contains: Components (React), stores (Zustand), utilities, styles
-- Key files: `App.tsx` (main router), `components/` (all UI)
+- Contains: Components, stores, utilities, styles
+- Key files: `App.tsx` (router), `main.tsx` (entry)
 
 **`src/components/`:**
-- Purpose: Reusable and page-level React components
-- Key:
-  - `DictationBar.tsx`: Floating overlay widget with waveform animation
-  - `Settings.tsx`: Quick settings panel
-  - `dashboard/`: Full feature dashboard with tabs
+- Purpose: Reusable React components
+- Contains: Dictation overlay, settings UI, dashboard pages
+- Key files: `DictationBar.tsx` (main overlay), `dashboard/Dashboard.tsx` (window router)
+
+**`src/components/dashboard/`:**
+- Purpose: Dashboard window pages (multi-tab interface)
+- Contains: HomePage (stats), HistoryPage, DictionaryPage, SettingsPage
+- Key files: `Dashboard.tsx` (page router), `SettingsPage.tsx` (largest/most complex)
 
 **`src/lib/`:**
-- Purpose: Zustand state management and Tauri API wrappers
-- Key:
-  - `store.ts`: Settings state (useStore hook)
-  - `historyStore.ts`: Paginated history state
-  - `tauri.ts`: Typed wrappers for Tauri invoke calls
+- Purpose: Stores, utilities, configuration
+- Contains: Zustand stores, Tauri integration, theme provider
+- Key files: `store.ts` (settings), `tauri.ts` (Tauri API wrapper)
+
+**`src/types/`:**
+- Purpose: Shared TypeScript interfaces matching Rust backend
+- Contains: Data structures for stats, history, dictionary, settings
+- Key files: `index.ts` (all types)
 
 **`src-tauri/src/`:**
-- Purpose: Rust backend implementation
-- Structure: Module per feature (audio, transcription, hotkey, injection, etc.)
+- Purpose: Rust backend application logic
+- Contains: System integration, transcription, data persistence
+- Key files: `lib.rs` (app setup and commands), `main.rs` (entry)
 
 **`src-tauri/src/audio/`:**
-- Purpose: Cross-platform audio capture and preprocessing
-- Key: `capture.rs` (manages audio stream), `vad.rs` (voice detection)
+- Purpose: Audio capture and processing
+- Contains: CPAL audio stream setup, level calculation, VAD hook
+- Key files: `capture.rs` (main capture logic), `mod.rs` (exports)
 
 **`src-tauri/src/transcription/`:**
-- Purpose: Speech-to-text model management and inference
-- Key: `whisper.rs` (local Whisper model), `cloud.rs` (cloud provider fallback)
-
-**`src-tauri/src/injection/`:**
-- Purpose: Platform-specific text injection
-- Key: Platform gates (macOS CoreGraphics, Windows Win32, Linux X11)
-
-**`src-tauri/src/hotkey/`:**
-- Purpose: Global hotkey registration and event emission
-- Pattern: Uses `tauri-plugin-global-shortcut`, supports F1-F12 keys
+- Purpose: Speech-to-text engine
+- Contains: Whisper model loading/caching, transcription, model management
+- Key files: `whisper.rs` (main implementation)
 
 **`src-tauri/src/settings/`:**
-- Purpose: Settings data structures and JSON persistence
-- Pattern: Serde serialization to `~/.config/mentascribe/settings.json`
+- Purpose: Settings persistence
+- Contains: UserSettings struct definition, JSON load/save
+- Key files: `mod.rs` (all logic)
+
+**`src-tauri/src/hotkey/`:**
+- Purpose: Global keyboard shortcut handling
+- Contains: global-hotkey registration, mode support (hold/toggle)
+- Key files: `mod.rs` (all logic)
+
+**`src-tauri/src/injection/`:**
+- Purpose: Text output to active application
+- Contains: enigo keyboard simulation, clipboard operations
+- Key files: `mod.rs` (all logic)
+
+**`src-tauri/src/history/`, `src-tauri/src/dictionary/`, `src-tauri/src/stats/`:**
+- Purpose: Persistent storage of user data
+- Contains: JSON file I/O, serde serialization
+- Key files: Each has single `mod.rs` with full implementation
 
 ## Key File Locations
 
 **Entry Points:**
-- Frontend: `/src/main.tsx` (React mount)
-- Frontend App: `/src/App.tsx` (window type detection and routing)
-- Backend: `/src-tauri/src/main.rs` (binary entry)
-- Backend Init: `/src-tauri/src/lib.rs` (Tauri app setup and commands)
+- Frontend: `src/main.tsx` - React root initialization
+- Frontend routing: `src/App.tsx` - Determines window type, sets up event listeners
+- Rust: `src-tauri/src/main.rs` - Calls `run()` from lib.rs
+- Rust setup: `src-tauri/src/lib.rs` - App initialization, command registration
 
 **Configuration:**
-- Tauri app config: `/src-tauri/tauri.conf.json` (windows, plugins, security)
-- TypeScript: `/tsconfig.json`
-- Build: `/vite.config.ts`
+- TypeScript: `tsconfig.json` - Frontend compiler options
+- Vite: `vite.config.ts` - Frontend build config
+- Tailwind: `tailwind.config.js` - CSS framework config
+- Tauri: `src-tauri/tauri.conf.json` - Window config, plugins, security
+- Rust: `src-tauri/Cargo.toml` - Dependencies
 
 **Core Logic:**
-- Recording loop: `/src-tauri/src/lib.rs` (`start_recording`, `stop_recording` commands)
-- Text injection: `/src-tauri/src/injection/mod.rs` (platform-specific)
-- Settings sync: `/src-tauri/src/settings/mod.rs` (persistence)
-- History storage: `/src-tauri/src/history/mod.rs` (JSON CRUD)
+- Recording pipeline: `src-tauri/src/lib.rs` (`start_recording`, `stop_recording`)
+- Transcription: `src-tauri/src/transcription/whisper.rs` (model loading, transcription)
+- Audio capture: `src-tauri/src/audio/capture.rs` (CPAL integration)
+- Settings: `src-tauri/src/settings/mod.rs` (persistence layer)
+- Text injection: `src-tauri/src/injection/mod.rs` (platform-specific output)
 
 **Testing:**
-- Tests co-located with source files (standard Rust pattern)
-- Frontend tests: Component tests in `src/` (if present)
-- No dedicated test directory structure yet
+- No test directory currently — tests would be added to `src-tauri/tests/` or component.test.ts
 
 ## Naming Conventions
 
 **Files:**
-- Component files: PascalCase (e.g., `DictationBar.tsx`, `Settings.tsx`)
-- Store files: camelCase (e.g., `historyStore.ts`, `dictionaryStore.ts`)
-- Module files: snake_case (e.g., `audio/capture.rs`, `src/injection/mod.rs`)
-- Type files: camelCase or PascalCase based on export (e.g., `types/index.ts`)
+- React components: PascalCase (e.g., `DictationBar.tsx`, `HistingsPage.tsx`)
+- Utilities/stores: camelCase (e.g., `store.ts`, `tauri.ts`, `theme.tsx`)
+- Rust modules: snake_case (e.g., `capture.rs`, `whisper.rs`)
 
 **Directories:**
-- Feature modules: lowercase plural (e.g., `components/`, `hooks/`, `lib/`)
-- Dashboard subfeatures: Pascal case (e.g., `components/dashboard/HistoryPage.tsx`)
-- Rust modules: lowercase (e.g., `src-tauri/src/audio/`, `src-tauri/src/transcription/`)
+- Feature-based grouping: `audio/`, `transcription/`, `components/`, `dashboard/`
+- Source roots: `src/` (frontend), `src-tauri/src/` (backend)
 
-**Functions:**
-- React components: PascalCase (e.g., `DictationBar`, `SettingsPage`)
-- Zustand hooks: prefix `use` (e.g., `useStore`, `useHistoryStore`)
-- Tauri commands: snake_case (e.g., `start_recording`, `inject_text`)
-- Rust functions: snake_case (e.g., `transcribe()`, `inject_text()`)
-
-**Variables:**
-- Frontend: camelCase (e.g., `isRecording`, `audioLevel`)
-- Rust: snake_case (e.g., `is_recording`, `audio_level`)
-
-**Types:**
-- TypeScript interfaces: PascalCase (e.g., `UserSettings`, `TranscriptionEntry`)
-- Rust structs: PascalCase (e.g., `UserSettings`, `AudioData`)
-- Enums: PascalCase with variants (e.g., `HotkeyError::UnknownKey`)
+**Functions/Variables:**
+- Rust: snake_case (`start_recording`, `get_models_dir`)
+- TypeScript: camelCase (`startRecording`, `loadSettings`)
+- React components: PascalCase (`DictationBar`, `HomePage`)
+- Types: PascalCase interfaces (e.g., `UserSettings`, `AudioData`)
 
 ## Where to Add New Code
 
-**New Feature:**
-- Primary code: `/src-tauri/src/[feature]/mod.rs` for backend logic
-- Frontend: `/src/components/[Feature].tsx` for UI or `/src/lib/[feature]Store.ts` for state
-- Command wrapper: Add function to `/src/lib/tauri.ts`
+**New Feature (UI):**
+- Primary code: `src/components/` (new component file)
+- Store if needed: `src/lib/` (new Zustand store)
+- Types: `src/types/index.ts` (add interface)
+- Example: Add new dashboard page → create `src/components/dashboard/NewPage.tsx`, register in `Dashboard.tsx` router
 
-**New Component/Module:**
-- Page component: `/src/components/dashboard/[PageName].tsx`
-- Utility component: `/src/components/[ComponentName].tsx`
-- Shared hook: `/src/hooks/[useName].ts`
+**New Backend Feature (Tauri Command):**
+- Command definition: `src-tauri/src/lib.rs` (add function with `#[tauri::command]`, register in invoke_handler)
+- Implementation: Create module in `src-tauri/src/` (e.g., `src-tauri/src/newfeature/mod.rs`)
+- Data types: `src-tauri/src/newfeature/mod.rs` and `src/types/index.ts` (matching types)
+- Example: Add download manager → create `src-tauri/src/downloads/mod.rs`, add command in lib.rs
 
-**Utilities:**
-- Shared helpers: `/src/lib/[name].ts` (frontend) or `/src-tauri/src/[module]/mod.rs` (backend)
-- Type definitions: `/src/types/index.ts`
-- Constants/config: `/src/lib/` or `/src-tauri/src/settings/`
+**New Store (Frontend State):**
+- Implementation: `src/lib/newStore.ts` (create Zustand store)
+- Export from: `src/lib/` (or create index.ts if multiple stores)
+- Usage: Import in components, use via hook (e.g., `useNewStore()`)
+
+**Utilities/Helpers:**
+- Shared helpers: `src/lib/` (TypeScript) or `src-tauri/src/` as module (Rust)
+- Example: Text formatting → `src-tauri/src/text/mod.rs`, hook from `stop_recording`
 
 **Styles:**
-- Global styles: `/src/styles/globals.css`
-- Component styles: Inline via Tailwind classes (preferred) or component-scoped CSS
+- Global styles: `src/styles/globals.css` (Tailwind directives)
+- Component styles: Inline Tailwind classes in JSX (tailwind-merge for conflicts)
 
 ## Special Directories
 
-**`/.planning/codebase/`:**
-- Purpose: GSD codebase analysis documents
-- Generated: Yes (by GSD agents)
-- Committed: Yes
+**`src-tauri/target/`:**
+- Purpose: Cargo build artifacts
+- Generated: Yes (by Cargo)
+- Committed: No (in .gitignore)
 
-**`/dist/`:**
-- Purpose: Built frontend output
+**`dist/`:**
+- Purpose: Built frontend assets from Vite
 - Generated: Yes (by `npm run build`)
-- Committed: No
+- Committed: No (in .gitignore)
 
-**`/node_modules/`:**
-- Purpose: npm package cache
-- Generated: Yes (by `npm install`)
-- Committed: No
-
-**`/src-tauri/target/`:**
-- Purpose: Rust build output and cache
-- Generated: Yes (by `cargo build`)
-- Committed: No
-
-**`/src-tauri/gen/`:**
-- Purpose: Generated Tauri type definitions and schemas
+**`src-tauri/gen/`:**
+- Purpose: Auto-generated Tauri files (schemas, types)
 - Generated: Yes (by Tauri CLI)
-- Committed: Yes (for team synchronization)
+- Committed: No (in .gitignore)
 
-## Build and Development Workflow
+**`.planning/codebase/`:**
+- Purpose: Codebase analysis documents (ARCHITECTURE.md, STRUCTURE.md, etc.)
+- Generated: No (manually created)
+- Committed: Yes (reference documents)
 
-**Frontend Build:**
-```bash
-pnpm build     # Runs `tsc && vite build` → outputs to /dist
-pnpm dev       # Runs vite dev server on port 1420
-```
-
-**Backend Build:**
-```bash
-cargo build --manifest-path src-tauri/Cargo.toml    # Dev build
-cargo build --release --manifest-path src-tauri/Cargo.toml  # Optimized
-```
-
-**Desktop App:**
-```bash
-pnpm tauri build      # Full production build
-pnpm tauri dev        # Dev mode (watches frontend and rebuilds Rust)
-```
-
-**Frontend served to Tauri:**
-- Vite dev server runs on port 1420 during dev
-- Built dist directory embedded during production
-- Window URLs point to `index.html#[route]` for routing
+**`node_modules/`:**
+- Purpose: npm dependencies
+- Generated: Yes (by npm install)
+- Committed: No (in .gitignore)
 
 ---
 
-*Structure analysis: 2026-02-18*
+*Structure analysis: 2026-02-19*

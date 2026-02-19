@@ -1,180 +1,138 @@
 # Technology Stack
 
-**Analysis Date:** 2026-02-18
+**Analysis Date:** 2026-02-19
 
 ## Languages
 
 **Primary:**
-- TypeScript 5.4.0 - Frontend React components in `src/`
-- Rust 2021 edition - Backend/desktop runtime in `src-tauri/`
+- TypeScript 5.4 - Frontend React components and Tauri API bindings
+- Rust 2021 edition - Tauri v2 backend (audio, transcription, system integration)
 
 **Secondary:**
-- JavaScript - Configuration files (vite, postcss, tailwind)
+- JavaScript/JSX - Vite configuration
+- CSS - Tailwind CSS styling
 
 ## Runtime
 
 **Environment:**
-- Tauri 2.x - Desktop application framework using webview + system integration
-- Node.js - Development environment (implied by package.json)
+- Tauri v2 - Cross-platform desktop framework (Rust backend + web frontend)
+- Node.js - Development build system (Vite)
 
 **Package Manager:**
-- npm - JavaScript dependencies
+- pnpm - Node.js packages
 - Cargo - Rust dependencies
-- Lockfiles: `package-lock.json` (present), `Cargo.lock` (present)
 
 ## Frameworks
 
-**Core Desktop:**
-- Tauri 2.0.0 - Desktop application framework
-  - Provides inter-process communication (IPC) between frontend and backend
-  - Tray icon support via `tauri-plugin-tray-icon`
-  - macOS private API support for fullscreen overlay capabilities
-
-**Frontend UI:**
-- React 18.3.0 - UI framework
-- React DOM 18.3.0 - React DOM rendering
+**Core:**
+- React 18.3 - Frontend UI library
+- Tauri 2 - Desktop application framework with macOS-private API support
+- Vite 5.2 - Frontend build tool and dev server (port 1420)
 
 **Styling:**
-- Tailwind CSS 3.4.0 - Utility-first CSS framework
-- PostCSS 8.4.0 - CSS processing
-- Autoprefixer 10.4.0 - Browser vendor prefix support
-- Tailwind Merge 2.2.0 - Utility class merging for Tailwind
-- CLSX 2.1.0 - Utility for classname management
-
-**Build:**
-- Vite 5.2.0 - Frontend build tool
-- TypeScript - Language compilation
-- ESLint 8.57.0 - Linting
-- Prettier 3.2.0 - Code formatting
+- Tailwind CSS 3.4 - Utility-first CSS framework
+- PostCSS 8.4 - CSS transformations (autoprefixer)
 
 **State Management:**
-- Zustand 4.5.0 - Lightweight state management library
+- Zustand 4.5 - Minimal React state management for settings and app state
 
 **Testing:**
-- Not detected
+- No testing framework detected in dependencies
 
-## Core Rust Dependencies
+**Build/Dev:**
+- @tauri-apps/cli 2 - Tauri CLI for building and development
+- TypeScript 5.4 - Type checking
+- ESLint 8.57 - Linting
+- Prettier 3.2 - Code formatting
+- @vitejs/plugin-react 4.2 - Vite React plugin
 
-**Audio:**
-- cpal 0.15 - Cross-platform audio I/O
-- hound 3.5 - WAV file writing/reading
+## Key Dependencies
 
-**Speech-to-Text:**
-- whisper-rs 0.11 - Local Whisper speech-to-text model
-- (Cloud providers: OpenAI, AWS Transcribe, AssemblyAI - not yet implemented)
+**Critical:**
+- `@tauri-apps/api` 2.0 - Tauri runtime API for IPC with Rust backend
+- `whisper-rs` 0.15 (with CoreML feature for macOS) - Local speech-to-text using Whisper model
+- `reqwest` 0.11 - HTTP client for API calls
+- `tokio` 1 - Async runtime
+
+**Audio Processing:**
+- `cpal` 0.15 - Cross-platform audio capture
+- `hound` 3.5 - WAV file format reading/writing
+- `rubato` 0.16 - Audio resampling
 
 **System Integration:**
-- global-hotkey 0.5 - Global keyboard hotkey binding
-- enigo 0.2 - Text injection and keyboard/mouse control
-- arboard 3 - Cross-platform clipboard access
-- tauri-plugin-shell 2 - Shell command execution
-- tauri-plugin-dialog 2 - Native file/folder dialogs
-- tauri-plugin-fs 2 - Filesystem operations
-- tauri-plugin-http 2 - HTTP client plugin
-- tauri-plugin-global-shortcut 2 - Global shortcut handling
+- `tauri-nspanel` (git: ahkohd/tauri-nspanel, branch: v2) - macOS NSPanel for fullscreen overlay support
+- `enigo` 0.2 - Cross-platform text injection (keyboard simulation)
+- `arboard` 3 - Cross-platform clipboard access
+- `global-hotkey` 0.5 - Global hotkey registration
+- `keyring` 2 - OS keychain for secure token storage
 
-**macOS-Specific:**
-- tauri-nspanel (from GitHub ahkohd/tauri-nspanel v2) - NSPanel support for fullscreen overlays
-- core-graphics 0.23 - macOS graphics primitives
-- cocoa 0.25 - macOS Cocoa framework bindings
-- objc 0.2 - Objective-C runtime
-- foreign-types 0.5 - FFI wrapper types
+**Platform-Specific:**
+- macOS: `core-graphics` 0.23, `cocoa` 0.25, `objc` 0.2 - macOS native APIs for window management and graphics
+- Windows: `windows` 0.54 - Windows API bindings
+- Linux: `x11` 2.21 - X11 window system
 
-**Windows-Specific:**
-- windows 0.54 - Windows API bindings (keyboard/mouse input)
+**Tauri Plugins:**
+- `tauri-plugin-shell` 2 - Shell command execution
+- `tauri-plugin-dialog` 2 - Native file dialogs
+- `tauri-plugin-fs` 2 - File system access
+- `tauri-plugin-http` 2 - HTTP requests from Rust backend
+- `tauri-plugin-global-shortcut` 2 - Global keyboard shortcuts
 
-**Linux-Specific:**
-- x11 2.21 - X11 protocol support
-
-**Networking:**
-- reqwest 0.11 - Async HTTP client (for API calls)
-- serde 1 - Serialization framework
-- serde_json 1 - JSON serialization
-
-**Storage & Security:**
-- keyring 2 - Secure credential storage (OS keychain)
-- dirs 6.0.0 - Standard directories (config, home, etc.)
-
-**Utilities:**
-- tokio 1 - Async runtime (full feature set)
-- log 0.4 - Logging abstraction
-- env_logger 0.11 - Environment-based logging configuration
-- chrono 0.4 - Date/time handling
-- uuid 1 - UUID generation (v4 + serde support)
-- regex 1 - Regular expressions
-- thiserror 1 - Error handling macros
-- anyhow 1 - Error context handling
-- lazy_static 1.5.0 - Lazy static initialization
-- once_cell 1.19 - One-time initialization
+**Serialization & Utilities:**
+- `serde` 1 - Serialization framework
+- `serde_json` 1 - JSON serialization
+- `uuid` 1 - UUID generation with v4 and serde support
+- `chrono` 0.4 - Date/time handling with serde support
+- `regex` 1 - Regular expressions
+- `log` 0.4 - Logging facade
+- `env_logger` 0.11 - Logging implementation
+- `thiserror` 1 - Error handling macros
+- `anyhow` 1 - Flexible error handling
+- `lazy_static` 1.5 - Static initialization
+- `once_cell` 1.19 - One-time initialization
+- `dirs` 6.0 - Platform-specific directory paths
 
 ## Configuration
 
-**Environment Variables:**
-- `VITE_*` - Vite-specific env vars
-- `TAURI_*` - Tauri-specific env vars
-- Set via `envPrefix` in `vite.config.ts`
-- API endpoint configuration in `src-tauri/src/api/client.rs` (hardcoded to `https://api.voice.mentaflux.ai/v1`)
+**Environment:**
+- No .env files present - Configuration via Tauri settings system in user config directory
+- Settings path: `~/.config/mentascribe/settings.json` (Linux/macOS) or platform default
+- Tauri env prefix: `VITE_` and `TAURI_`
 
-**Files:**
-- `vite.config.ts` - Frontend build configuration
-- `tsconfig.json` - TypeScript compiler options (strict mode enabled)
+**Build:**
+- `vite.config.ts` - Vite configuration with React plugin
+- `tsconfig.json` - TypeScript compiler options (strict mode enabled, ES2020 target)
 - `tailwind.config.js` - Tailwind CSS configuration
 - `postcss.config.js` - PostCSS configuration
-- `src-tauri/tauri.conf.json` - Tauri application configuration (windows, tray, security policy)
-- `src-tauri/Cargo.toml` - Rust dependencies and build profile
-- `.eslintrc` - Not detected (using default or implicit rules)
-- `.prettierrc` - Not detected (using defaults)
+- `src-tauri/Cargo.toml` - Rust dependencies and features
 
-## Platform Support
+**Feature Flags:**
+- Tauri: `custom-protocol` (default) - Custom protocol for frontend/backend communication
+- Tauri macOS: `macos-private-api` enabled - Required for NSPanel fullscreen overlay
+- Whisper: `coreml` feature on macOS - Apple Neural Engine acceleration
+
+## Platform Requirements
 
 **Development:**
-- macOS (tested/primary)
-- Windows (Windows API support included)
-- Linux (X11 support included)
+- Node.js (with pnpm)
+- Rust toolchain
+- macOS minimum: 10.15 (Catalina)
+- Requires Xcode for macOS builds
 
 **Production:**
-- Bundling targets: DMG (macOS), MSI/NSIS (Windows), AppImage/DEB/RPM (Linux)
-- Minimum macOS version: 10.15
-- Build requires: Rust toolchain, Node.js, npm
+- Deployment targets:
+  - macOS: DMG bundle format
+  - Windows: MSI and NSIS installers
+  - Linux: AppImage, deb, rpm packages
+- Tauri 2 provides single-code-base deployment across platforms
 
-## Application Configuration
-
-**Tauri Windows:**
-1. **Dictation Window:**
-   - Size: 340x120px
-   - Properties: transparent, always-on-top, skipTaskbar, no decorations, non-interactive overlay
-   - Location: `src/components/TranscriptionOverlay.tsx`
-   - Window level: 25 (above main menu) on macOS for fullscreen overlay support
-
-2. **Settings Window:**
-   - Size: 480x640px (resizable)
-   - Route: `index.html#settings`
-   - Component: `src/components/Settings.tsx`
-
-3. **Dashboard Window:**
-   - Size: 800x600px (resizable, min 640x480)
-   - Route: `index.html#dashboard`
-   - Component: `src/components/dashboard/Dashboard.tsx`
-
-**Security Policy:**
-- CSP: `default-src 'self'; connect-src https://api.voice.mentaflux.ai; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'`
-- Allows connections only to `api.voice.mentaflux.ai`
-
-**Local Data Storage:**
-- Settings: `~/.config/mentascribe/settings.json`
-- History: `~/.config/mentascribe/history.json`
-- Tokens: OS keychain (via `keyring` library)
-
-## Tauri IPC Commands
-
-**Frontend invokes Backend via:**
-- `start_recording()` - Begin audio capture
-- `stop_recording()` - End recording, return transcribed text
-- `inject_text(text)` - Inject text into active application
-- `login(email, password)` - Authenticate with MentaFlux API
-- `download_model(size)` - Download Whisper model
-- `get_available_models()` - List available speech models
+**Performance Optimization (Release Build):**
+- Panic: abort (no stack unwinding)
+- LTO: enabled (link-time optimization)
+- Optimization level: s (size over speed)
+- Strip symbols: yes
+- Codegen units: 1
 
 ---
 
-*Stack analysis: 2026-02-18*
+*Stack analysis: 2026-02-19*
