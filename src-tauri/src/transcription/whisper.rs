@@ -45,13 +45,16 @@ fn get_models_dir() -> PathBuf {
         .join("models")
 }
 
-fn get_model_path(size: &str) -> PathBuf {
-    let filename = if size == "large" {
+fn get_model_filename(size: &str) -> String {
+    if size == "large" {
         "ggml-large-v3.bin".to_string()
     } else {
         format!("ggml-{}.bin", size)
-    };
-    get_models_dir().join(filename)
+    }
+}
+
+fn get_model_path(size: &str) -> PathBuf {
+    get_models_dir().join(get_model_filename(size))
 }
 
 /// Get the CoreML encoder model directory name for a given model size.
@@ -78,12 +81,16 @@ fn ggml_size_bytes(size: &str) -> u64 {
         "small" => 466_000_000,
         "medium" => 1_500_000_000,
         "large" => 2_900_000_000,
+        "large-v3-turbo" => 1_500_000_000,
+        "large-v3-turbo-q5_0" => 547_000_000,
+        "large-v3-q5_0" => 1_100_000_000,
         _ => 0,
     }
 }
 
 /// Approximate CoreML encoder zip download size in bytes for a given model size.
 /// Used as a fallback when Content-Length is absent (chunked transfer encoding).
+/// Returns 0 for models without available CoreML encoders.
 fn coreml_size_bytes(size: &str) -> u64 {
     match size {
         "tiny" => 42_000_000,
@@ -96,6 +103,7 @@ fn coreml_size_bytes(size: &str) -> u64 {
 }
 
 /// Approximate CoreML encoder zip download sizes (MB) from HuggingFace.
+/// Returns 0 for models without available CoreML encoders (quantized, turbo).
 fn coreml_size_mb(size: &str) -> u32 {
     match size {
         "tiny" => 42,
@@ -103,6 +111,7 @@ fn coreml_size_mb(size: &str) -> u32 {
         "small" => 244,
         "medium" => 776,
         "large" => 1550,
+        // Quantized and turbo models don't have separate CoreML encoders
         _ => 0,
     }
 }
@@ -122,7 +131,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
             id: "tiny".to_string(),
-            name: "Tiny (75MB)".to_string(),
+            name: "Tiny".to_string(),
             size_mb: 75,
             downloaded: models_dir.join("ggml-tiny.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("tiny"),
@@ -130,7 +139,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
         },
         ModelInfo {
             id: "base".to_string(),
-            name: "Base (142MB)".to_string(),
+            name: "Base".to_string(),
             size_mb: 142,
             downloaded: models_dir.join("ggml-base.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("base"),
@@ -138,7 +147,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
         },
         ModelInfo {
             id: "small".to_string(),
-            name: "Small (466MB)".to_string(),
+            name: "Small".to_string(),
             size_mb: 466,
             downloaded: models_dir.join("ggml-small.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("small"),
@@ -146,7 +155,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
         },
         ModelInfo {
             id: "medium".to_string(),
-            name: "Medium (1.5GB)".to_string(),
+            name: "Medium".to_string(),
             size_mb: 1500,
             downloaded: models_dir.join("ggml-medium.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("medium"),
@@ -154,11 +163,35 @@ pub fn get_available_models() -> Vec<ModelInfo> {
         },
         ModelInfo {
             id: "large".to_string(),
-            name: "Large (2.9GB)".to_string(),
+            name: "Large v3".to_string(),
             size_mb: 2900,
             downloaded: models_dir.join("ggml-large-v3.bin").exists(),
             coreml_downloaded: is_coreml_downloaded("large"),
             coreml_size_mb: coreml_size_mb("large"),
+        },
+        ModelInfo {
+            id: "large-v3-turbo".to_string(),
+            name: "Large v3 Turbo".to_string(),
+            size_mb: 1500,
+            downloaded: models_dir.join("ggml-large-v3-turbo.bin").exists(),
+            coreml_downloaded: false,
+            coreml_size_mb: 0,
+        },
+        ModelInfo {
+            id: "large-v3-turbo-q5_0".to_string(),
+            name: "Large v3 Turbo Q5".to_string(),
+            size_mb: 547,
+            downloaded: models_dir.join("ggml-large-v3-turbo-q5_0.bin").exists(),
+            coreml_downloaded: false,
+            coreml_size_mb: 0,
+        },
+        ModelInfo {
+            id: "large-v3-q5_0".to_string(),
+            name: "Large v3 Q5".to_string(),
+            size_mb: 1100,
+            downloaded: models_dir.join("ggml-large-v3-q5_0.bin").exists(),
+            coreml_downloaded: false,
+            coreml_size_mb: 0,
         },
     ]
 }
@@ -170,12 +203,7 @@ pub async fn download_model(
     let models_dir = get_models_dir();
     std::fs::create_dir_all(&models_dir)?;
 
-    let model_name = if size == "large" {
-        "ggml-large-v3.bin".to_string()
-    } else {
-        format!("ggml-{}.bin", size)
-    };
-
+    let model_name = get_model_filename(size);
     let url = format!("{}/{}", MODEL_BASE_URL, model_name);
     let path = models_dir.join(&model_name);
 

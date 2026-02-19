@@ -1183,8 +1183,18 @@ export function SettingsPage() {
                             {model.name}
                           </span>
                           <span className="text-xs text-stone-500 dark:text-stone-400 ml-2">
-                            ({model.size_mb}MB)
+                            ({formatSize(model.size_mb)})
                           </span>
+                          {model.id.includes('turbo') && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 ml-2">
+                              Fast
+                            </span>
+                          )}
+                          {model.id.includes('q5') && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 ml-2">
+                              Quantized
+                            </span>
+                          )}
                         </div>
                       </label>
 
@@ -1269,7 +1279,7 @@ export function SettingsPage() {
                     <p className="text-xs text-stone-400 dark:text-stone-500 mb-2">
                       CoreML encoders accelerate your selected speech model via Apple Neural Engine. Each encoder requires its corresponding base model above.
                     </p>
-                    {models.filter(m => m.downloaded).map(model => {
+                    {models.filter(m => m.downloaded && m.coreml_size_mb > 0).map(model => {
                       const isActiveModel = settings.transcription.model_size === model.id;
                       const coremlProgress = downloadProgress[`coreml:${model.id}`];
                       return (
