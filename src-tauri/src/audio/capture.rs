@@ -85,9 +85,14 @@ pub fn start_capture() -> Result<(), AudioError> {
         return Err(AudioError::AlreadyRunning);
     }
 
-    // Clear buffer
-    AUDIO_BUFFER.lock().unwrap().clear();
-    eprintln!("[capture] Buffer cleared");
+    // Clear buffer and pre-allocate for up to 30s at 48kHz stereo
+    // to avoid ~21 Vec reallocations during recording
+    {
+        let mut buf = AUDIO_BUFFER.lock().unwrap();
+        buf.clear();
+        buf.reserve(48000 * 2 * 30);
+    }
+    eprintln!("[capture] Buffer cleared and pre-allocated");
 
     // Create channel for stop signal
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -190,9 +195,6 @@ pub fn start_capture() -> Result<(), AudioError> {
         }
     });
 
-    // Give the thread a moment to initialize
-    thread::sleep(std::time::Duration::from_millis(100));
-
     *AUDIO_THREAD.lock().unwrap() = Some(AudioThreadHandle {
         stop_sender: stop_tx,
         thread_handle,
@@ -231,7 +233,7 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
     // Reset audio level
     *CURRENT_AUDIO_LEVEL.lock().unwrap() = 0.0;
 
-    let samples = AUDIO_BUFFER.lock().unwrap().clone();
+    let samples = std::mem::take(&mut *AUDIO_BUFFER.lock().unwrap());
     let sample_rate = *SAMPLE_RATE.lock().unwrap();
     let channels = *CHANNELS.lock().unwrap();
 
@@ -271,11 +273,11 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
     })
 }
 
-/// Resample audio to 16kHz mono for Whisper, with silence trimming.
+/// Resample audio to 16kHz mono for Whisper.
 /// Takes ownership of AudioData to avoid cloning samples when already mono.
+/// Note: silence trimming removed — Silero VAD pre-filtering in whisper.rs
+/// handles speech/silence segmentation with much higher accuracy.
 pub fn prepare_for_whisper(audio: AudioData) -> Vec<f32> {
-    use super::vad::trim_silence;
-
     eprintln!(
         "[audio] prepare_for_whisper: input {} samples at {}Hz, {} channels",
         audio.samples.len(),
@@ -308,45 +310,17 @@ pub fn prepare_for_whisper(audio: AudioData) -> Vec<f32> {
         eprintln!("[audio] After resampling to 16kHz: {} samples", mono_samples.len());
     }
 
-    // Calculate max amplitude to check if there's actual audio
-    let max_amplitude = mono_samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-    eprintln!("[audio] Max amplitude in audio: {:.6}", max_amplitude);
-
-    // Only trim silence if we have meaningful audio
-    // Use a very low threshold (0.005) and only trim if result keeps at least 50% of audio
-    let trimmed = trim_silence(&mono_samples, 0.005, 1600);
-
-    // If trimming would remove more than 80% of audio, skip trimming
-    let final_samples = if trimmed.len() < mono_samples.len() / 5 {
-        eprintln!(
-            "[audio] Silence trimming too aggressive ({} -> {} samples), skipping trim",
-            mono_samples.len(),
-            trimmed.len()
-        );
-        mono_samples
-    } else {
-        eprintln!(
-            "[audio] Trimmed silence: {} -> {} samples (removed {} samples)",
-            mono_samples.len(),
-            trimmed.len(),
-            mono_samples.len() - trimmed.len()
-        );
-        trimmed.to_vec()
-    };
-
     eprintln!(
         "[audio] Final audio for Whisper: {} samples ({:.2}s at 16kHz)",
-        final_samples.len(),
-        final_samples.len() as f32 / 16000.0
+        mono_samples.len(),
+        mono_samples.len() as f32 / 16000.0
     );
 
-    final_samples
+    mono_samples
 }
 
 fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-    };
+    use rubato::{FastFixedIn, PolynomialDegree, Resampler};
 
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
@@ -354,16 +328,10 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 
     let ratio = to_rate as f64 / from_rate as f64;
 
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-
+    // Use FastFixedIn with cubic interpolation — much faster than sinc for speech-to-text.
+    // Cubic is more than sufficient quality for ASR (we don't need music-production fidelity).
     let chunk_size = 1024;
-    let mut resampler = match SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1) {
+    let mut resampler = match FastFixedIn::<f32>::new(ratio, 2.0, PolynomialDegree::Cubic, chunk_size, 1) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[audio] rubato resampler creation failed: {}, falling back to linear", e);

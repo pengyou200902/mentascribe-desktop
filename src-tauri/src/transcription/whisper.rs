@@ -429,6 +429,16 @@ pub async fn ensure_vad_model() -> Result<(), WhisperError> {
     Ok(())
 }
 
+// Wrapper to allow WhisperVadContext in a static Mutex.
+// Safety: whisper.cpp VAD context uses no thread-local storage and is safe
+// to move between threads. It's only accessed behind the VAD_CACHE mutex.
+struct SendableVadContext(WhisperVadContext);
+unsafe impl Send for SendableVadContext {}
+
+// Cached VAD context to avoid reloading the 2MB Silero model from disk
+// on every transcription. Saves ~5-20ms per call (disk I/O + ONNX init).
+static VAD_CACHE: Lazy<Mutex<Option<SendableVadContext>>> = Lazy::new(|| Mutex::new(None));
+
 /// Pre-filter audio using Silero VAD to extract only speech segments.
 /// This strips non-speech audio before whisper inference, dramatically reducing
 /// computation for recordings with silence/noise.
@@ -444,17 +454,32 @@ fn vad_filter_speech(samples: &[f32]) -> Vec<f32> {
 
     let vad_start = std::time::Instant::now();
 
-    // Create VAD context (small model, fast to load)
-    let mut ctx_params = WhisperVadContextParams::new();
-    ctx_params.set_n_threads(2);
-
-    let mut vad_ctx = match WhisperVadContext::new(vad_path.to_str().unwrap(), ctx_params) {
-        Ok(ctx) => ctx,
+    // Get or create cached VAD context
+    let mut vad_guard = match VAD_CACHE.lock() {
+        Ok(guard) => guard,
         Err(e) => {
-            log::warn!("Failed to load VAD model: {}, skipping pre-filtering", e);
+            log::warn!("VAD cache lock poisoned: {}, skipping pre-filtering", e);
             return samples.to_vec();
         }
     };
+
+    if vad_guard.is_none() {
+        let mut ctx_params = WhisperVadContextParams::new();
+        ctx_params.set_n_threads(2);
+
+        match WhisperVadContext::new(vad_path.to_str().unwrap(), ctx_params) {
+            Ok(ctx) => {
+                log::info!("VAD context created and cached");
+                *vad_guard = Some(SendableVadContext(ctx));
+            }
+            Err(e) => {
+                log::warn!("Failed to load VAD model: {}, skipping pre-filtering", e);
+                return samples.to_vec();
+            }
+        }
+    }
+
+    let vad_ctx = &mut vad_guard.as_mut().unwrap().0;
 
     // Configure VAD params for dictation use
     let mut vad_params = WhisperVadParams::new();
