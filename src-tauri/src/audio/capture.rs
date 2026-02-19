@@ -295,6 +295,7 @@ pub fn prepare_for_whisper(audio: &AudioData) -> Vec<f32> {
             .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
             .collect()
     } else {
+        // Clone needed: we only have &AudioData and need a mutable owned Vec
         audio.samples.clone()
     };
 
@@ -342,13 +343,24 @@ pub fn prepare_for_whisper(audio: &AudioData) -> Vec<f32> {
 }
 
 fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
     let ratio = from_rate as f64 / to_rate as f64;
     let new_len = (samples.len() as f64 / ratio) as usize;
     let mut resampled = Vec::with_capacity(new_len);
 
     for i in 0..new_len {
-        let src_idx = (i as f64 * ratio) as usize;
-        if src_idx < samples.len() {
+        let src_pos = i as f64 * ratio;
+        let src_idx = src_pos as usize;
+        let frac = src_pos - src_idx as f64;
+
+        if src_idx + 1 < samples.len() {
+            // Linear interpolation between adjacent samples
+            let sample = samples[src_idx] as f64 * (1.0 - frac)
+                + samples[src_idx + 1] as f64 * frac;
+            resampled.push(sample as f32);
+        } else if src_idx < samples.len() {
             resampled.push(samples[src_idx]);
         }
     }
