@@ -348,6 +348,9 @@ fn update_settings(
         apply_panel_opacity(&app, new_opacity);
     }
 
+    // Notify all windows (especially dictation) that settings changed
+    app.emit("settings-changed", &new_settings).ok();
+
     Ok(())
 }
 

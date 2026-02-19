@@ -135,9 +135,13 @@ function App() {
     }
   }, [saveToHistory]);
 
-  // Load settings on mount
+  // Load settings on mount and when changed from another window
   useEffect(() => {
     loadSettings();
+    const unlisten = listen('settings-changed', () => {
+      loadSettings();
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, [loadSettings]);
 
   // Multi-monitor tracking: periodically check if mouse moved to different monitor
