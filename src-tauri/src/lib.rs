@@ -99,6 +99,27 @@ fn refresh_panel_settings(app: &tauri::AppHandle) {
             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
         panel.set_collection_behaviour(behavior);
 
+        // Apply opacity from settings
+        let opacity = app.state::<AppState>().settings.lock()
+            .map(|s| s.widget.opacity)
+            .unwrap_or(1.0);
+        apply_panel_opacity(app, opacity);
+    }
+}
+
+/// Apply opacity to the NSPanel via [NSWindow setAlphaValue:]
+#[cfg(target_os = "macos")]
+fn apply_panel_opacity(app: &tauri::AppHandle, opacity: f64) {
+    use cocoa::base::id;
+    use objc::{msg_send, sel, sel_impl};
+    use tauri_nspanel::ManagerExt;
+
+    let opacity = opacity.clamp(0.2, 1.0);
+    if let Ok(panel) = app.get_webview_panel("dictation") {
+        unsafe {
+            let ns_panel: id = msg_send![&*panel, self];
+            let _: () = msg_send![ns_panel, setAlphaValue: opacity as f64];
+        }
     }
 }
 
@@ -293,15 +314,17 @@ fn update_settings(
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (old_hotkey, old_draggable) = {
+    let (old_hotkey, old_draggable, old_opacity) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        (settings.hotkey.key.clone(), settings.widget.draggable)
+        (settings.hotkey.key.clone(), settings.widget.draggable, settings.widget.opacity)
     };
 
     let new_draggable = new_settings.widget.draggable;
     if old_draggable != new_draggable {
         eprintln!("[settings] DRAGGABLE CHANGED: {} -> {}", old_draggable, new_draggable);
     }
+
+    let new_opacity = new_settings.widget.opacity;
 
     let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
     *settings = new_settings.clone();
@@ -313,8 +336,14 @@ fn update_settings(
     if old_hotkey != new_settings.hotkey.key {
         drop(settings); // Release lock before hotkey operations
         hotkey::unregister_all(&app).map_err(|e| e.to_string())?;
-        hotkey::setup_hotkey(app, new_settings.hotkey.key.as_deref())
+        hotkey::setup_hotkey(app.clone(), new_settings.hotkey.key.as_deref())
             .map_err(|e| e.to_string())?;
+    }
+
+    // Apply opacity change to NSPanel
+    #[cfg(target_os = "macos")]
+    if (old_opacity - new_opacity).abs() > f64::EPSILON {
+        apply_panel_opacity(&app, new_opacity);
     }
 
     Ok(())

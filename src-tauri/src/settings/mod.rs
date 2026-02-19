@@ -42,9 +42,25 @@ pub struct OutputSettings {
     pub auto_capitalize: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetSettings {
     pub draggable: bool,
+    /// Widget opacity from 0.2 (nearly transparent) to 1.0 (fully opaque)
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+}
+
+fn default_opacity() -> f64 {
+    1.0
+}
+
+impl Default for WidgetSettings {
+    fn default() -> Self {
+        Self {
+            draggable: false,
+            opacity: default_opacity(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

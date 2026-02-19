@@ -31,6 +31,7 @@ export interface OutputSettings {
 
 export interface WidgetSettings {
   draggable: boolean;
+  opacity: number; // 0.2 to 1.0
 }
 
 export interface UserSettings {

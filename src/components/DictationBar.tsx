@@ -9,6 +9,7 @@ interface DictationBarProps {
   error?: string | null;
   statusOverride?: string;
   draggable?: boolean;
+  opacity?: number;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
@@ -17,6 +18,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   audioLevel = 0,
   error = null,
   draggable = false,
+  opacity = 1.0,
 }) => {
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
@@ -202,7 +204,7 @@ export const DictationBar: FC<DictationBarProps> = ({
     <div
       ref={widgetRef}
       className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''}`}
-      style={draggable ? { cursor: 'grab' } : undefined}
+      style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
       onMouseDown={handleMouseDown}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}

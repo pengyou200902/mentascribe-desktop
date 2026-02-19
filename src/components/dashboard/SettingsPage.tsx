@@ -1004,6 +1004,26 @@ export function SettingsPage() {
               checked={settings.widget?.draggable ?? false}
               onChange={(checked) => handleChange('widget', 'draggable', checked)}
             />
+            <div className="pt-2">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <span className="text-sm font-medium text-stone-700 dark:text-stone-300">Opacity</span>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Adjust the widget transparency</p>
+                </div>
+                <span className="text-sm font-medium text-stone-500 dark:text-stone-400 tabular-nums">
+                  {Math.round((settings.widget?.opacity ?? 1.0) * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="20"
+                max="100"
+                step="5"
+                value={Math.round((settings.widget?.opacity ?? 1.0) * 100)}
+                onChange={(e) => handleChange('widget', 'opacity', parseInt(e.target.value) / 100)}
+                className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-stone-200 dark:bg-stone-700 accent-amber-500 dark:accent-amber-400"
+              />
+            </div>
           </SettingsSection>
 
           {/* Transcription */}

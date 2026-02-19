@@ -267,8 +267,9 @@ function App() {
     );
   }
 
-  // Log when draggable setting changes
+  // Log when widget settings change
   const draggableValue = settings?.widget?.draggable ?? false;
+  const opacityValue = settings?.widget?.opacity ?? 1.0;
   useEffect(() => {
     console.log(`[app] draggable prop changed to: ${draggableValue}`);
   }, [draggableValue]);
@@ -283,6 +284,7 @@ function App() {
         error={error}
         statusOverride={isDownloadingModel ? 'Downloading model...' : undefined}
         draggable={draggableValue}
+        opacity={opacityValue}
       />
     </div>
   );
