@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use thiserror::Error;
-use whisper_rs::{WhisperContext, WhisperContextParameters};
+use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 
 use super::{CoremlStatus, ModelInfo};
 
@@ -37,6 +37,7 @@ pub enum WhisperError {
 }
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const VAD_MODEL_FILENAME: &str = "ggml-silero-vad.bin";
 
 fn get_models_dir() -> PathBuf {
     dirs::home_dir()
@@ -377,6 +378,126 @@ pub async fn download_coreml_model(
     Ok(())
 }
 
+fn get_vad_model_path() -> PathBuf {
+    get_models_dir().join(VAD_MODEL_FILENAME)
+}
+
+/// Download the Silero VAD model (~2MB) if not already present.
+/// Called automatically during model preload.
+pub async fn ensure_vad_model() -> Result<(), WhisperError> {
+    let path = get_vad_model_path();
+    if path.exists() {
+        return Ok(());
+    }
+
+    let models_dir = get_models_dir();
+    std::fs::create_dir_all(&models_dir)?;
+
+    let url = format!("{}/{}", MODEL_BASE_URL, VAD_MODEL_FILENAME);
+    log::info!("Downloading VAD model from {} to {:?}", url, path);
+
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(WhisperError::DownloadError(format!(
+            "HTTP {}",
+            response.status()
+        )));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+
+    std::fs::write(&path, &bytes)?;
+    log::info!("VAD model downloaded successfully ({} bytes)", bytes.len());
+    Ok(())
+}
+
+/// Pre-filter audio using Silero VAD to extract only speech segments.
+/// This strips non-speech audio before whisper inference, dramatically reducing
+/// computation for recordings with silence/noise.
+///
+/// Returns the filtered audio samples, or the original samples if VAD is unavailable.
+/// Expects 16kHz mono f32 input.
+fn vad_filter_speech(samples: &[f32]) -> Vec<f32> {
+    let vad_path = get_vad_model_path();
+    if !vad_path.exists() {
+        log::debug!("VAD model not found, skipping pre-filtering");
+        return samples.to_vec();
+    }
+
+    let vad_start = std::time::Instant::now();
+
+    // Create VAD context (small model, fast to load)
+    let mut ctx_params = WhisperVadContextParams::new();
+    ctx_params.set_n_threads(2);
+
+    let mut vad_ctx = match WhisperVadContext::new(vad_path.to_str().unwrap(), ctx_params) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            log::warn!("Failed to load VAD model: {}, skipping pre-filtering", e);
+            return samples.to_vec();
+        }
+    };
+
+    // Configure VAD params for dictation use
+    let mut vad_params = WhisperVadParams::new();
+    vad_params.set_threshold(0.5);
+    vad_params.set_min_speech_duration(250); // 250ms minimum speech
+    vad_params.set_min_silence_duration(100); // 100ms silence to split
+    vad_params.set_speech_pad(30); // 30ms padding around speech
+
+    // Run VAD to get speech timestamps
+    let segments = match vad_ctx.segments_from_samples(vad_params, samples) {
+        Ok(segs) => segs,
+        Err(e) => {
+            log::warn!("VAD inference failed: {}, skipping pre-filtering", e);
+            return samples.to_vec();
+        }
+    };
+
+    let n_segments = segments.num_segments();
+    if n_segments == 0 {
+        log::info!("VAD: no speech detected in audio, passing through unchanged");
+        return samples.to_vec();
+    }
+
+    // Extract speech samples from detected segments
+    let mut speech_samples = Vec::new();
+    for seg in segments {
+        // Timestamps are in centiseconds (0.01s), convert to sample indices at 16kHz
+        let start_sample = (seg.start * 160.0) as usize; // 0.01s * 16000 = 160 samples/cs
+        let end_sample = ((seg.end * 160.0) as usize).min(samples.len());
+        if start_sample < end_sample {
+            speech_samples.extend_from_slice(&samples[start_sample..end_sample]);
+        }
+    }
+
+    if speech_samples.is_empty() {
+        log::warn!("VAD: extracted 0 speech samples, passing through original");
+        return samples.to_vec();
+    }
+
+    let original_duration = samples.len() as f32 / 16000.0;
+    let filtered_duration = speech_samples.len() as f32 / 16000.0;
+    let vad_elapsed = vad_start.elapsed();
+
+    log::info!(
+        "VAD: {:.2}s -> {:.2}s ({} segments, {:.0}% reduction) in {:.1}ms",
+        original_duration,
+        filtered_duration,
+        n_segments,
+        (1.0 - filtered_duration / original_duration) * 100.0,
+        vad_elapsed.as_secs_f64() * 1000.0
+    );
+
+    speech_samples
+}
+
 /// Preload the Whisper model into MODEL_CACHE so the first transcription is fast.
 ///
 /// This loads the GGML model file from disk, initializes the Metal/CoreML GPU backend,
@@ -486,6 +607,9 @@ pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<Str
 
     // Prepare audio for Whisper (16kHz mono)
     let samples = prepare_for_whisper(audio);
+
+    // Pre-filter with Silero VAD to strip non-speech segments
+    let samples = vad_filter_speech(&samples);
 
     // Run transcription in blocking task to not block async runtime
     let path = model_path.clone();

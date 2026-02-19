@@ -1060,6 +1060,16 @@ pub fn run() {
                         preload_model_size
                     );
 
+                    // Download VAD model if not present (~2MB, fast)
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build();
+                    if let Ok(rt) = rt {
+                        if let Err(e) = rt.block_on(transcription::whisper::ensure_vad_model()) {
+                            log::warn!("Failed to download VAD model: {} (VAD pre-filtering will be skipped)", e);
+                        }
+                    }
+
                     // Emit preload-start event to all windows
                     preload_app_handle.emit("model-preload-start", &preload_model_size).ok();
 
