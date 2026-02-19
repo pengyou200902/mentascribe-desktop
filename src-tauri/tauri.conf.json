@@ -29,17 +29,6 @@
         "acceptFirstMouse": true
       },
       {
-        "label": "settings",
-        "title": "MentaScribe Settings",
-        "width": 480,
-        "height": 640,
-        "resizable": true,
-        "fullscreen": false,
-        "visible": false,
-        "decorations": true,
-        "url": "index.html#settings"
-      },
-      {
         "label": "dashboard",
         "title": "MentaScribe",
         "width": 800,

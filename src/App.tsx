@@ -2,12 +2,10 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { DictationBar } from './components/DictationBar';
-import { Settings } from './components/Settings';
-import { History } from './components/History';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { useStore } from './lib/store';
 
-type WindowType = 'dictation' | 'settings' | 'history' | 'dashboard';
+type WindowType = 'dictation' | 'dashboard';
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -56,8 +54,6 @@ function App() {
   // Determine which window type we're in based on URL hash
   const getWindowType = (): WindowType => {
     const hash = window.location.hash.slice(1);
-    if (hash === 'settings') return 'settings';
-    if (hash === 'history') return 'history';
     if (hash === 'dashboard' || hash.startsWith('dashboard')) return 'dashboard';
     return 'dictation';
   };
@@ -249,22 +245,6 @@ function App() {
   // Render based on window type
   if (windowType === 'dashboard') {
     return <Dashboard />;
-  }
-
-  if (windowType === 'settings') {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4">
-        <Settings onBack={() => window.close()} />
-      </div>
-    );
-  }
-
-  if (windowType === 'history') {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white p-4">
-        <History onBack={() => window.close()} />
-      </div>
-    );
   }
 
   // Log when widget settings change

@@ -839,40 +839,23 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
     }
 }
 
-fn open_settings_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
-        window.show().ok();
-        window.set_focus().ok();
-    } else {
-        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html#settings".into()))
-            .title("MentaScribe Settings")
-            .inner_size(480.0, 640.0)
-            .resizable(true)
-            .build()
-            .ok();
-    }
-}
-
-fn open_history_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("history") {
-        window.show().ok();
-        window.set_focus().ok();
-    } else {
-        WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
-            .title("MentaScribe History")
-            .inner_size(480.0, 500.0)
-            .resizable(true)
-            .build()
-            .ok();
-    }
-}
-
-fn open_dashboard_window(app: &tauri::AppHandle) {
+/// Open the dashboard window, optionally navigating to a specific page.
+fn open_dashboard_window(app: &tauri::AppHandle, page: Option<&str>) {
     if let Some(window) = app.get_webview_window("dashboard") {
         window.show().ok();
         window.set_focus().ok();
+        // Navigate to the requested page within the existing dashboard
+        if let Some(p) = page {
+            app.emit("navigate-to-page", p).ok();
+        }
     } else {
-        WebviewWindowBuilder::new(app, "dashboard", WebviewUrl::App("index.html#dashboard".into()))
+        // Create dashboard with optional page in URL hash
+        let url = if let Some(p) = page {
+            format!("index.html#dashboard/{}", p)
+        } else {
+            "index.html#dashboard".to_string()
+        };
+        WebviewWindowBuilder::new(app, "dashboard", WebviewUrl::App(url.into()))
             .title("MentaScribe")
             .inner_size(800.0, 600.0)
             .min_inner_size(640.0, 480.0)
@@ -1066,32 +1049,28 @@ pub fn run() {
                 native_position_on_cursor_monitor(&app_handle, false).ok();
             }
 
-            // Build tray menu
-            let dashboard_item = MenuItem::with_id(app, "dashboard", "Dashboard...", true, None::<&str>)?;
-            let settings_item = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
-            let history_item = MenuItem::with_id(app, "history", "History...", true, None::<&str>)?;
-            let toggle_item = MenuItem::with_id(app, "toggle", "Show/Hide", true, None::<&str>)?;
+            // Build tray menu (shown on right-click)
+            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let history_item = MenuItem::with_id(app, "history", "History", true, None::<&str>)?;
+            let toggle_item = MenuItem::with_id(app, "toggle", "Show/Hide Widget", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 app,
-                &[&dashboard_item, &settings_item, &history_item, &toggle_item, &quit_item],
+                &[&settings_item, &history_item, &toggle_item, &quit_item],
             )?;
 
-            // Build tray icon
+            // Build tray icon — single click opens dashboard, right-click shows menu
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .show_menu_on_left_click(true)
+                .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "dashboard" => {
-                        open_dashboard_window(app);
-                    }
                     "settings" => {
-                        open_settings_window(app);
+                        open_dashboard_window(app, Some("settings"));
                     }
                     "history" => {
-                        open_history_window(app);
+                        open_dashboard_window(app, Some("history"));
                     }
                     "toggle" => {
                         toggle_dictation_window(app);
@@ -1100,6 +1079,16 @@ pub fn run() {
                         app.exit(0);
                     }
                     _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        open_dashboard_window(tray.app_handle(), None);
+                    }
                 })
                 .build(app)?;
 
