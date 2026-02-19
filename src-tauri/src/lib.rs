@@ -324,6 +324,13 @@ fn update_settings(
     let new_draggable = new_settings.widget.draggable;
     if old_draggable != new_draggable {
         eprintln!("[settings] DRAGGABLE CHANGED: {} -> {}", old_draggable, new_draggable);
+
+        // When draggable is turned OFF, snap widget back to bottom-center of current screen
+        #[cfg(target_os = "macos")]
+        if !new_draggable {
+            eprintln!("[settings] Snapping widget to bottom-center (draggable OFF)");
+            native_position_on_cursor_monitor(&app, false).ok();
+        }
     }
 
     let new_opacity = new_settings.widget.opacity;
