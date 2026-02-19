@@ -484,6 +484,17 @@ fn vad_filter_speech(samples: &[f32]) -> Vec<f32> {
 
     let original_duration = samples.len() as f32 / 16000.0;
     let filtered_duration = speech_samples.len() as f32 / 16000.0;
+
+    // Guard: if VAD filtered audio is too short (<0.5s), whisper can produce
+    // degenerate output (hallucinations, empty text). Fall back to original audio.
+    if filtered_duration < 0.5 {
+        log::warn!(
+            "VAD: filtered audio too short ({:.2}s < 0.5s), passing through original ({:.2}s)",
+            filtered_duration,
+            original_duration
+        );
+        return samples.to_vec();
+    }
     let vad_elapsed = vad_start.elapsed();
 
     log::info!(
@@ -715,12 +726,13 @@ fn run_whisper(
         params.set_audio_ctx(audio_ctx);
     }
 
-    // === Disable temperature fallback ===
-    // Prevents retry mechanism with increasing temperature on failure.
-    // Default retries up to 4-5 times, causing tail-latency spikes.
-    // No quality impact for clean microphone input.
+    // === Temperature settings ===
+    // Start with greedy decoding (temperature 0) for speed, but allow fallback
+    // with temperature_inc(0.2) so whisper retries with increasing randomness on
+    // failure. Disabling fallback entirely (0.0) caused "thank you" hallucinations
+    // when VAD produced short/unusual fragments with no recovery path.
     params.set_temperature(0.0);
-    params.set_temperature_inc(0.0);
+    params.set_temperature_inc(0.2);
 
     // === Skip timestamp token generation ===
     // We only extract text, not timestamps — saves 5-10%.
@@ -735,7 +747,7 @@ fn run_whisper(
     params.set_max_tokens(128);
 
     log::info!(
-        "Whisper params: n_threads={}, audio_ctx={}{} ({:.1}s audio), greedy(best_of=1), no_timestamps, single_segment, max_tokens=128",
+        "Whisper params: n_threads={}, audio_ctx={}{} ({:.1}s audio), greedy(best_of=1), temp_inc=0.2, no_timestamps, single_segment, max_tokens=128",
         n_threads, audio_ctx, if has_coreml { " (CoreML, full window)" } else { "" }, audio_seconds
     );
 
