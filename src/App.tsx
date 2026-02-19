@@ -77,6 +77,9 @@ function App() {
       // Reset ref on error
       isRecordingRef.current = false;
       console.error('Failed to start recording:', error);
+      // Show brief error so user gets feedback (clears quickly)
+      setError('Mic busy — try again');
+      setTimeout(() => setError(null), 2000);
     }
   }, []);
 
@@ -179,6 +182,10 @@ function App() {
   // Set up event listeners (only once)
   useEffect(() => {
     const unlistenPressed = listen('hotkey-pressed', async () => {
+      // Only the dictation window should handle recording — dashboard must ignore
+      // to prevent race conditions where both windows invoke start/stop simultaneously
+      if (windowType !== 'dictation') return;
+
       const mode = settingsRef.current?.hotkey?.mode ?? 'toggle'; // Default to toggle
       console.log('Hotkey pressed, mode:', mode, 'isRecording:', isRecordingRef.current);
 
@@ -195,6 +202,8 @@ function App() {
     });
 
     const unlistenReleased = listen('hotkey-released', async () => {
+      if (windowType !== 'dictation') return;
+
       const mode = settingsRef.current?.hotkey?.mode ?? 'toggle';
       console.log('Hotkey released, mode:', mode, 'isRecording:', isRecordingRef.current);
 

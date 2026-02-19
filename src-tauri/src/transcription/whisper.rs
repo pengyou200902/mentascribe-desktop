@@ -3,15 +3,17 @@ use crate::settings::UserSettings;
 use once_cell::sync::Lazy;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 
 use super::{CoremlStatus, ModelInfo};
 
-// Cache for the Whisper model context to avoid reloading on every transcription
+// Cache for the Whisper model context to avoid reloading on every transcription.
+// Arc-wrapped so we can clone the context out of the cache and release the mutex
+// before running inference (which takes 1-30+ seconds).
 struct ModelCache {
-    context: Option<WhisperContext>,
+    context: Option<Arc<WhisperContext>>,
     model_size: String,
     model_path: PathBuf,
 }
@@ -555,6 +557,7 @@ pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
 
     let mut ctx_params = WhisperContextParameters::default();
     ctx_params.flash_attn(true);
+    ctx_params.use_gpu(true); // Enable Metal GPU acceleration for decoder
 
     let ctx = WhisperContext::new_with_params(
         model_path.to_str().unwrap(),
@@ -587,8 +590,8 @@ pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
     );
     drop(_state);
 
-    // Store in cache
-    cache.context = Some(ctx);
+    // Store in cache (Arc-wrapped for lock-free inference)
+    cache.context = Some(Arc::new(ctx));
     cache.model_size = model_size.to_string();
     cache.model_path = model_path;
 
@@ -645,45 +648,51 @@ fn run_whisper(
 
     let run_start = std::time::Instant::now();
 
-    // Get or create the cached context
-    let mut cache = MODEL_CACHE
-        .lock()
-        .map_err(|e| WhisperError::TranscriptionError(format!("Cache lock error: {}", e)))?;
+    // Get or create the cached context, then clone the Arc and release the lock.
+    // This ensures inference (which takes 1-30s) doesn't block preload or other callers.
+    let ctx = {
+        let mut cache = MODEL_CACHE
+            .lock()
+            .map_err(|e| WhisperError::TranscriptionError(format!("Cache lock error: {}", e)))?;
 
-    // Check if we need to reload the model
-    if cache.context.is_none() || cache.model_size != model_size || cache.model_path != *model_path
-    {
-        log::info!(
-            "Loading Whisper model: {} from {:?}",
-            model_size,
-            model_path
-        );
+        // Check if we need to reload the model
+        if cache.context.is_none()
+            || cache.model_size != model_size
+            || cache.model_path != *model_path
+        {
+            log::info!(
+                "Loading Whisper model: {} from {:?}",
+                model_size,
+                model_path
+            );
 
-        let load_start = std::time::Instant::now();
+            let load_start = std::time::Instant::now();
 
-        let mut ctx_params = WhisperContextParameters::default();
-        ctx_params.flash_attn(true);
+            let mut ctx_params = WhisperContextParameters::default();
+            ctx_params.flash_attn(true);
+            ctx_params.use_gpu(true); // Enable Metal GPU acceleration for decoder
 
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap(),
-            ctx_params,
-        )
-        .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+            let new_ctx = WhisperContext::new_with_params(
+                model_path.to_str().unwrap(),
+                ctx_params,
+            )
+            .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
 
-        cache.context = Some(ctx);
-        cache.model_size = model_size.to_string();
-        cache.model_path = model_path.clone();
+            cache.context = Some(Arc::new(new_ctx));
+            cache.model_size = model_size.to_string();
+            cache.model_path = model_path.clone();
 
-        log::info!(
-            "Whisper model loaded and cached in {:.2}s",
-            load_start.elapsed().as_secs_f64()
-        );
-    } else {
-        log::info!("Using cached Whisper model: {}", model_size);
-    }
+            log::info!(
+                "Whisper model loaded and cached in {:.2}s",
+                load_start.elapsed().as_secs_f64()
+            );
+        } else {
+            log::info!("Using cached Whisper model: {}", model_size);
+        }
 
-    // Use the cached context
-    let ctx = cache.context.as_ref().unwrap();
+        // Clone the Arc (cheap pointer copy) and drop the MutexGuard
+        Arc::clone(cache.context.as_ref().unwrap())
+    }; // <-- lock released here
 
     let state_start = std::time::Instant::now();
     let mut state = ctx

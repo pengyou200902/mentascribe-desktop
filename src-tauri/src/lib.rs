@@ -316,9 +316,14 @@ fn update_settings(
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (old_hotkey, old_draggable, old_opacity) = {
+    let (old_hotkey, old_draggable, old_opacity, old_model_size) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        (settings.hotkey.key.clone(), settings.widget.draggable, settings.widget.opacity)
+        (
+            settings.hotkey.key.clone(),
+            settings.widget.draggable,
+            settings.widget.opacity,
+            settings.transcription.model_size.clone(),
+        )
     };
 
     let new_draggable = new_settings.widget.draggable;
@@ -357,6 +362,46 @@ fn update_settings(
 
     // Notify all windows (especially dictation) that settings changed
     app.emit("settings-changed", &new_settings).ok();
+
+    // Preload new model in background if model_size changed
+    let new_model_size = new_settings.transcription.model_size.clone();
+    if old_model_size != new_model_size {
+        if let Some(model_size) = new_model_size {
+            let preload_app = app.clone();
+            std::thread::spawn(move || {
+                log::info!("Model changed to '{}', preloading in background...", model_size);
+                preload_app.emit("model-preload-start", &model_size).ok();
+                let start = std::time::Instant::now();
+                match transcription::whisper::preload_model(&model_size) {
+                    Ok(()) => {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        log::info!("Model '{}' preloaded in {:.2}s", model_size, elapsed);
+                        preload_app
+                            .emit(
+                                "model-preload-complete",
+                                serde_json::json!({
+                                    "model": &model_size,
+                                    "elapsed_secs": elapsed,
+                                }),
+                            )
+                            .ok();
+                    }
+                    Err(e) => {
+                        log::error!("Failed to preload model '{}': {}", model_size, e);
+                        preload_app
+                            .emit(
+                                "model-preload-error",
+                                serde_json::json!({
+                                    "model": &model_size,
+                                    "error": e.to_string(),
+                                }),
+                            )
+                            .ok();
+                    }
+                }
+            });
+        }
+    }
 
     Ok(())
 }
