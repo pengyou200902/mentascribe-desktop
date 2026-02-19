@@ -401,9 +401,12 @@ fn run_whisper(
             model_path
         );
 
+        let mut ctx_params = WhisperContextParameters::default();
+        ctx_params.flash_attn(true);
+
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().unwrap(),
-            WhisperContextParameters::default(),
+            ctx_params,
         )
         .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
 
@@ -452,19 +455,20 @@ fn run_whisper(
         .full(params, samples)
         .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
 
-    let num_segments = state
-        .full_n_segments()
-        .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+    let num_segments = state.full_n_segments();
 
     log::info!("Whisper found {} segments", num_segments);
 
     let mut text = String::new();
     for i in 0..num_segments {
         let segment = state
-            .full_get_segment_text(i)
+            .get_segment(i)
+            .ok_or_else(|| WhisperError::TranscriptionError(format!("Segment {} not found", i)))?;
+        let segment_text = segment
+            .to_str()
             .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
-        log::debug!("Segment {}: '{}'", i, segment);
-        text.push_str(&segment);
+        log::debug!("Segment {}: '{}'", i, segment_text);
+        text.push_str(segment_text);
     }
 
     let result = text.trim().to_string();
