@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use thiserror::Error;
 use whisper_rs::{WhisperContext, WhisperContextParameters};
 
-use super::ModelInfo;
+use super::{CoremlStatus, ModelInfo};
 
 // Cache for the Whisper model context to avoid reloading on every transcription
 struct ModelCache {
@@ -48,6 +48,30 @@ fn get_model_path(size: &str) -> PathBuf {
     get_models_dir().join(format!("ggml-{}.bin", size))
 }
 
+/// Get the CoreML encoder model directory name for a given model size.
+/// whisper.cpp expects: `ggml-{name}-encoder.mlmodelc/` next to the GGML model.
+fn coreml_encoder_name(size: &str) -> String {
+    if size == "large" {
+        "ggml-large-v3-encoder.mlmodelc".to_string()
+    } else {
+        format!("ggml-{}-encoder.mlmodelc", size)
+    }
+}
+
+/// Check if the CoreML encoder model is downloaded for a given size.
+pub fn is_coreml_downloaded(size: &str) -> bool {
+    get_models_dir().join(coreml_encoder_name(size)).is_dir()
+}
+
+/// Get CoreML support status for this platform.
+pub fn get_coreml_status() -> CoremlStatus {
+    CoremlStatus {
+        compiled: cfg!(target_os = "macos"),
+        supported: cfg!(target_os = "macos"),
+        apple_silicon: cfg!(all(target_os = "macos", target_arch = "aarch64")),
+    }
+}
+
 pub fn get_available_models() -> Vec<ModelInfo> {
     let models_dir = get_models_dir();
 
@@ -57,30 +81,35 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             name: "Tiny (75MB)".to_string(),
             size_mb: 75,
             downloaded: models_dir.join("ggml-tiny.bin").exists(),
+            coreml_downloaded: is_coreml_downloaded("tiny"),
         },
         ModelInfo {
             id: "base".to_string(),
             name: "Base (142MB)".to_string(),
             size_mb: 142,
             downloaded: models_dir.join("ggml-base.bin").exists(),
+            coreml_downloaded: is_coreml_downloaded("base"),
         },
         ModelInfo {
             id: "small".to_string(),
             name: "Small (466MB)".to_string(),
             size_mb: 466,
             downloaded: models_dir.join("ggml-small.bin").exists(),
+            coreml_downloaded: is_coreml_downloaded("small"),
         },
         ModelInfo {
             id: "medium".to_string(),
             name: "Medium (1.5GB)".to_string(),
             size_mb: 1500,
             downloaded: models_dir.join("ggml-medium.bin").exists(),
+            coreml_downloaded: is_coreml_downloaded("medium"),
         },
         ModelInfo {
             id: "large".to_string(),
             name: "Large (2.9GB)".to_string(),
             size_mb: 2900,
             downloaded: models_dir.join("ggml-large-v3.bin").exists(),
+            coreml_downloaded: is_coreml_downloaded("large"),
         },
     ]
 }
@@ -119,6 +148,80 @@ pub async fn download_model(size: &str) -> Result<(), WhisperError> {
     std::fs::write(&path, bytes)?;
 
     log::info!("Model downloaded successfully");
+    Ok(())
+}
+
+/// Download the CoreML encoder model for a given size.
+/// Downloads the zip from HuggingFace and extracts it into the models directory.
+pub async fn download_coreml_model(size: &str) -> Result<(), WhisperError> {
+    let models_dir = get_models_dir();
+    std::fs::create_dir_all(&models_dir)?;
+
+    let encoder_name = coreml_encoder_name(size);
+    let zip_name = format!("{}.zip", encoder_name);
+    let url = format!("{}/{}", MODEL_BASE_URL, zip_name);
+    let zip_path = models_dir.join(&zip_name);
+    let dest_dir = models_dir.join(&encoder_name);
+
+    // Skip if already downloaded
+    if dest_dir.is_dir() {
+        log::info!("CoreML model already exists: {:?}", dest_dir);
+        return Ok(());
+    }
+
+    log::info!("Downloading CoreML model from {} to {:?}", url, zip_path);
+
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(WhisperError::DownloadError(format!(
+            "HTTP {} for CoreML model",
+            response.status()
+        )));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| WhisperError::DownloadError(e.to_string()))?;
+
+    std::fs::write(&zip_path, &bytes)?;
+    log::info!("CoreML zip downloaded ({} bytes), extracting...", bytes.len());
+
+    // Extract using unzip (always available on macOS)
+    let output = std::process::Command::new("unzip")
+        .arg("-o") // overwrite without prompting
+        .arg("-q") // quiet
+        .arg(&zip_path)
+        .arg("-d")
+        .arg(&models_dir)
+        .output()
+        .map_err(|e| WhisperError::DownloadError(format!("Failed to run unzip: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Clean up zip on failure
+        std::fs::remove_file(&zip_path).ok();
+        return Err(WhisperError::DownloadError(format!(
+            "unzip failed: {}",
+            stderr
+        )));
+    }
+
+    // Clean up zip file
+    std::fs::remove_file(&zip_path).ok();
+
+    if dest_dir.is_dir() {
+        log::info!("CoreML model extracted successfully: {:?}", dest_dir);
+    } else {
+        return Err(WhisperError::DownloadError(format!(
+            "Extraction succeeded but {:?} not found",
+            dest_dir
+        )));
+    }
+
     Ok(())
 }
 

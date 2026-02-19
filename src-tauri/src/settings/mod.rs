@@ -16,6 +16,9 @@ pub struct TranscriptionSettings {
     pub language: Option<String>,      // "auto", "en", "es", etc.
     pub model_size: Option<String>,    // "tiny", "base", "small", "medium", "large"
     pub cloud_provider: Option<String>, // "aws", "openai", "assemblyai"
+    /// CoreML acceleration: None = auto-detect (enabled if supported), Some(true/false) = override
+    #[serde(default)]
+    pub use_coreml: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

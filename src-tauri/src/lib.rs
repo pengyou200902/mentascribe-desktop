@@ -368,6 +368,18 @@ fn get_available_models() -> Vec<transcription::ModelInfo> {
     transcription::whisper::get_available_models()
 }
 
+#[tauri::command]
+fn get_coreml_status() -> transcription::CoremlStatus {
+    transcription::whisper::get_coreml_status()
+}
+
+#[tauri::command]
+async fn download_coreml_model(size: String) -> Result<(), String> {
+    transcription::whisper::download_coreml_model(&size)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // Stats commands
 #[tauri::command]
 fn get_stats() -> Result<stats::LocalStats, String> {
@@ -969,6 +981,19 @@ pub fn run() {
             let hotkey_key = loaded_settings.hotkey.key.as_deref();
             hotkey::setup_hotkey(app_handle.clone(), hotkey_key)?;
 
+            // Auto-detect CoreML: if use_coreml is None and platform supports it, enable
+            let coreml_status = transcription::whisper::get_coreml_status();
+            if loaded_settings.transcription.use_coreml.is_none() && coreml_status.supported {
+                log::info!("CoreML supported on this platform (apple_silicon={}), auto-enabling", coreml_status.apple_silicon);
+                let mut auto_settings = loaded_settings.clone();
+                auto_settings.transcription.use_coreml = Some(true);
+                settings::save_settings(&auto_settings).ok();
+                // Update the managed state too
+                if let Ok(mut s) = app_handle.state::<AppState>().settings.lock() {
+                    s.transcription.use_coreml = Some(true);
+                }
+            }
+
             // Check if the configured model is downloaded
             let models = transcription::whisper::get_available_models();
             let configured_model = loaded_settings
@@ -1059,6 +1084,8 @@ pub fn run() {
             login,
             download_model,
             get_available_models,
+            get_coreml_status,
+            download_coreml_model,
             // Stats
             get_stats,
             record_transcription_stats,
