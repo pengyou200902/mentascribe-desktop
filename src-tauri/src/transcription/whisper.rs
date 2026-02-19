@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use whisper_rs::{WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 
-use super::{CoremlStatus, ModelInfo};
+use super::{CoremlStatus, MetalStatus, ModelInfo};
 
 // Cache for the Whisper model context to avoid reloading on every transcription.
 // Arc-wrapped so we can clone the context out of the cache and release the mutex
@@ -125,6 +125,16 @@ pub fn get_coreml_status() -> CoremlStatus {
         compiled: cfg!(target_os = "macos"),
         supported: cfg!(target_os = "macos"),
         apple_silicon: cfg!(all(target_os = "macos", target_arch = "aarch64")),
+    }
+}
+
+/// Get Metal GPU support status for this platform.
+/// Metal is compiled via the "metal" feature on whisper-rs (macOS only)
+/// and enabled at runtime via `ctx_params.use_gpu(true)`.
+pub fn get_metal_status() -> MetalStatus {
+    MetalStatus {
+        compiled: cfg!(target_os = "macos"),
+        supported: cfg!(target_os = "macos"),
     }
 }
 
@@ -638,6 +648,52 @@ pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<Str
     result
 }
 
+/// Check if a model is a "turbo" variant (pruned to 4 decoder layers).
+/// Turbo models are more resilient to aggressive optimizations like reduced
+/// audio_ctx and single_segment mode. Full models (32 decoder layers) need
+/// more conservative settings to avoid hallucinations.
+fn is_turbo_model(model_size: &str) -> bool {
+    model_size.contains("turbo")
+}
+
+/// Known whisper hallucination phrases that appear when the model generates
+/// text from silence or near-silence. These are artifacts from the training
+/// data (YouTube subtitles) that the model memorized.
+const HALLUCINATION_PHRASES: &[&str] = &[
+    "thank you",
+    "thanks for watching",
+    "thanks for listening",
+    "thank you for watching",
+    "thank you for listening",
+    "please subscribe",
+    "like and subscribe",
+    "subtitles by",
+    "transcribed by",
+    "copyright",
+    "the end",
+    "you",
+];
+
+/// Check if text is likely a hallucination (common phrases whisper generates
+/// from silence/noise rather than actual speech).
+fn is_likely_hallucination(text: &str) -> bool {
+    let normalized = text.trim().to_lowercase();
+    // Empty or very short results from non-trivial audio are suspicious
+    if normalized.is_empty() {
+        return false; // Empty is handled elsewhere, not a hallucination
+    }
+    // Check exact matches and prefix matches against known hallucination phrases
+    for phrase in HALLUCINATION_PHRASES {
+        if normalized == *phrase
+            || normalized == format!("{}.", phrase)
+            || normalized == format!("{}!", phrase)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn run_whisper(
     model_path: &PathBuf,
     model_size: &str,
@@ -714,19 +770,27 @@ fn run_whisper(
         .min(6);
     params.set_n_threads(n_threads);
 
+    // Determine model characteristics for parameter tuning
+    let is_turbo = is_turbo_model(model_size);
+    let has_coreml = is_coreml_downloaded(model_size);
+    let audio_seconds = samples.len() as f32 / 16000.0;
+
     // === Dynamic audio_ctx: limit encoder window to actual audio length ===
     // Whisper always processes a 30s window (1500 mel frames). For short dictation,
     // most of that is zero-padded silence. Setting audio_ctx proportionally skips it.
     //
     // IMPORTANT: CoreML encoder models are compiled with a FIXED input shape (1500 frames).
-    // Setting audio_ctx < 1500 causes shape mismatch → garbage encoder output → hallucinations
-    // like "thank you". Only apply dynamic audio_ctx for CPU-only inference (no CoreML encoder).
-    let audio_seconds = samples.len() as f32 / 16000.0;
-    let has_coreml = is_coreml_downloaded(model_size);
-    let audio_ctx = if has_coreml {
-        0 // 0 = use default (full 1500 window), safe for CoreML
+    // Setting audio_ctx < 1500 causes shape mismatch -> garbage encoder output -> hallucinations.
+    //
+    // IMPORTANT: Full large-v3 models (32 decoder layers, including quantized variants like
+    // large-v3-q5_0) are very sensitive to reduced audio_ctx. The 32-layer decoder amplifies
+    // small encoder artifacts from truncated context into confident hallucinations like
+    // "Thank you". Only turbo models (4 decoder layers) are resilient enough for this
+    // optimization. Always use the full 1500 window for non-turbo models.
+    let audio_ctx = if has_coreml || !is_turbo {
+        0 // 0 = use default (full 1500 window), safe for CoreML and full-size decoders
     } else {
-        // CPU-only: shrink encoder window proportionally for speed
+        // Turbo + CPU-only: shrink encoder window proportionally for speed
         let ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
         let ctx = ((ctx + 255) / 256) * 256; // round up to multiple of 256
         ctx.clamp(768, 1500) // min 768 (quality), max 1500 (whisper limit)
@@ -744,20 +808,60 @@ fn run_whisper(
     params.set_temperature_inc(0.2);
 
     // === Skip timestamp token generation ===
-    // We only extract text, not timestamps — saves 5-10%.
+    // We only extract text, not timestamps -- saves 5-10%.
     params.set_no_timestamps(true);
 
-    // === Force single-segment output ===
-    // Skips multi-segment seeking logic. Ideal for short dictation utterances.
-    params.set_single_segment(true);
+    // === Single-segment mode (turbo models only) ===
+    // single_segment skips multi-segment seeking logic for speed.
+    // This is safe for turbo models (4 decoder layers) on short dictation.
+    //
+    // For full large-v3 models (32 decoder layers), the seeking logic acts as a
+    // critical hallucination safeguard: it detects when a segment is likely wrong
+    // (via entropy/logprob thresholds) and retries with different parameters.
+    // Disabling it removes the only recovery path, causing persistent "Thank you"
+    // hallucinations on the full large-v3 and large-v3-q5_0 models.
+    params.set_single_segment(is_turbo);
+
+    // === Anti-hallucination parameters ===
+    // suppress_blank: Suppress blank/empty segments at the start of output.
+    // Prevents the decoder from emitting whitespace-only tokens.
+    params.set_suppress_blank(true);
+
+    // no_speech_thold: Probability threshold for classifying a segment as silence.
+    // When the model's no-speech probability exceeds this, the segment text is suppressed.
+    // Default is 0.6. For full large-v3 models, use a slightly lower threshold to be
+    // more aggressive at filtering hallucinations from silence.
+    params.set_no_speech_thold(if is_turbo { 0.6 } else { 0.5 });
+
+    // entropy_thold: Segments with average token entropy above this are considered
+    // low-confidence and trigger temperature fallback or are discarded.
+    // Default is 2.4. For full models, use a tighter threshold to catch hallucinations
+    // earlier (hallucinated text often has higher entropy than real transcription).
+    params.set_entropy_thold(if is_turbo { 2.4 } else { 2.2 });
+
+    // logprob_thold: Segments with average token log probability below this are
+    // considered low-confidence. Default is -1.0. For full models, use a slightly
+    // higher (less negative) threshold to reject more uncertain outputs.
+    params.set_logprob_thold(if is_turbo { -1.0 } else { -0.8 });
 
     // === Cap decoder output tokens ===
     // Prevents hallucination loops that can add seconds of latency.
     params.set_max_tokens(128);
 
     log::info!(
-        "Whisper params: n_threads={}, audio_ctx={}{} ({:.1}s audio), greedy(best_of=1), temp_inc=0.2, no_timestamps, single_segment, max_tokens=128",
-        n_threads, audio_ctx, if has_coreml { " (CoreML, full window)" } else { "" }, audio_seconds
+        "Whisper params: model={} ({}), n_threads={}, audio_ctx={}{} ({:.1}s audio), greedy(best_of=1), \
+         temp_inc=0.2, no_timestamps, single_segment={}, suppress_blank=true, \
+         no_speech_thold={}, entropy_thold={}, logprob_thold={}, max_tokens=128",
+        model_size,
+        if is_turbo { "turbo/4-layer" } else { "full/32-layer" },
+        n_threads,
+        audio_ctx,
+        if has_coreml { " (CoreML, full window)" } else if !is_turbo { " (full window, non-turbo)" } else { "" },
+        audio_seconds,
+        is_turbo,
+        if is_turbo { 0.6 } else { 0.5 },
+        if is_turbo { 2.4 } else { 2.2 },
+        if is_turbo { -1.0 } else { -0.8 },
     );
 
     // Set language if specified
@@ -801,9 +905,30 @@ fn run_whisper(
     }
 
     let result = text.trim().to_string();
+
+    // === Post-inference hallucination guard ===
+    // Even with proper parameters, the full large-v3 model can occasionally produce
+    // known hallucination phrases (especially on very short audio). If the result
+    // matches a known hallucination pattern AND the audio was short, return empty
+    // rather than injecting garbage text into the user's document.
+    if is_likely_hallucination(&result) {
+        log::warn!(
+            "Whisper output '{}' matches known hallucination pattern (model={}, {:.1}s audio), suppressing",
+            result,
+            model_size,
+            audio_seconds
+        );
+        let total_elapsed = run_start.elapsed();
+        log::info!(
+            "Whisper transcription complete in {:.2}s -- hallucination suppressed (0 chars)",
+            total_elapsed.as_secs_f64()
+        );
+        return Ok(String::new());
+    }
+
     let total_elapsed = run_start.elapsed();
     log::info!(
-        "Whisper transcription complete in {:.2}s — result: '{}' ({} chars)",
+        "Whisper transcription complete in {:.2}s -- result: '{}' ({} chars)",
         total_elapsed.as_secs_f64(),
         if result.len() > 100 {
             format!("{}...", &result[..100])

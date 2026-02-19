@@ -147,6 +147,11 @@ interface CoremlStatus {
   apple_silicon: boolean;
 }
 
+interface MetalStatus {
+  compiled: boolean;
+  supported: boolean;
+}
+
 // Section Component
 interface SettingsSectionProps {
   icon: React.ReactNode;
@@ -928,6 +933,7 @@ export function SettingsPage() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [coremlStatus, setCoremlStatus] = useState<CoremlStatus | null>(null);
+  const [metalStatus, setMetalStatus] = useState<MetalStatus | null>(null);
   const [downloadingCoreml, setDownloadingCoreml] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -935,6 +941,7 @@ export function SettingsPage() {
   useEffect(() => {
     loadModels();
     loadCoremlStatus();
+    loadMetalStatus();
   }, []);
 
   // Listen for download progress events from the backend
@@ -957,6 +964,15 @@ export function SettingsPage() {
       setCoremlStatus(status);
     } catch (error) {
       console.error('Failed to load CoreML status:', error);
+    }
+  }
+
+  async function loadMetalStatus() {
+    try {
+      const status = await invoke<MetalStatus>('get_metal_status');
+      setMetalStatus(status);
+    } catch (error) {
+      console.error('Failed to load Metal status:', error);
     }
   }
 
@@ -1204,7 +1220,12 @@ export function SettingsPage() {
                               CoreML
                             </span>
                           )}
-                          {coremlStatus?.supported && model.coreml_size_mb === 0 && (
+                          {coremlStatus?.supported && model.coreml_size_mb === 0 && metalStatus?.supported && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 ml-2">
+                              Metal GPU
+                            </span>
+                          )}
+                          {coremlStatus?.supported && model.coreml_size_mb === 0 && !metalStatus?.supported && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700/50 text-stone-500 dark:text-stone-400 ml-2">
                               CPU only
                             </span>
@@ -1291,7 +1312,7 @@ export function SettingsPage() {
                 {(settings.transcription.use_coreml ?? true) && (
                   <div className="space-y-2">
                     <p className="text-xs text-stone-400 dark:text-stone-500 mb-2">
-                      CoreML encoders accelerate speech models via Apple Neural Engine. Turbo and quantized models use optimized CPU inference instead and don't require CoreML encoders.
+                      CoreML encoders accelerate the speech encoder via Apple Neural Engine. Turbo and quantized models don't require CoreML encoders but still benefit from Metal GPU decoder acceleration.
                     </p>
                     {selectedModelLacksCoreml && selectedModelInfo && (
                       <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
@@ -1300,12 +1321,12 @@ export function SettingsPage() {
                         </svg>
                         <div>
                           <p className="text-xs font-medium text-blue-700 dark:text-blue-400">
-                            {selectedModelInfo.name} uses CPU-only inference
+                            {selectedModelInfo.name} doesn't use CoreML encoder
                           </p>
                           <p className="text-xs text-blue-600 dark:text-blue-400/70 mt-0.5">
                             {selectedModelInfo.id.includes('turbo')
-                              ? 'Turbo models have a pruned decoder (4 layers vs 32) for fast inference without CoreML.'
-                              : 'Quantized models use reduced precision for smaller size and faster inference without CoreML.'
+                              ? 'Turbo models have a pruned decoder (4 layers vs 32) optimized for fast inference. Metal GPU still accelerates the decoder.'
+                              : 'Quantized models use reduced precision for smaller size and faster inference. Metal GPU still accelerates the decoder.'
                             }
                           </p>
                         </div>
@@ -1398,6 +1419,27 @@ export function SettingsPage() {
                     })}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Metal GPU Acceleration */}
+            {metalStatus?.supported && (
+              <div className="pt-4 border-t border-stone-100 dark:border-stone-700">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
+                        Metal GPU Acceleration
+                      </span>
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                        Active
+                      </span>
+                    </div>
+                    <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                      GPU-accelerated decoder via Apple Metal for all models
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
           </SettingsSection>

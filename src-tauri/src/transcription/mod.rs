@@ -24,6 +24,14 @@ pub struct CoremlStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetalStatus {
+    /// Metal GPU feature is compiled into this build (macOS only)
+    pub compiled: bool,
+    /// Current platform supports Metal GPU acceleration
+    pub supported: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionResult {
     pub text: String,
     pub language: Option<String>,

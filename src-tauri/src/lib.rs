@@ -444,6 +444,11 @@ fn get_coreml_status() -> transcription::CoremlStatus {
 }
 
 #[tauri::command]
+fn get_metal_status() -> transcription::MetalStatus {
+    transcription::whisper::get_metal_status()
+}
+
+#[tauri::command]
 async fn download_coreml_model(app: tauri::AppHandle, size: String) -> Result<(), String> {
     let app_clone = app.clone();
     let size_clone = size.clone();
@@ -1229,6 +1234,7 @@ pub fn run() {
             download_model,
             get_available_models,
             get_coreml_status,
+            get_metal_status,
             download_coreml_model,
             delete_model,
             delete_coreml_model,
