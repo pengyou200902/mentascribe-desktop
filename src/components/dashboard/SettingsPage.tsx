@@ -1068,6 +1068,10 @@ export function SettingsPage() {
     );
   }
 
+  // Check if selected model supports CoreML (for info banner in CoreML section)
+  const selectedModelInfo = models.find(m => m.id === settings.transcription.model_size);
+  const selectedModelLacksCoreml = selectedModelInfo && selectedModelInfo.coreml_size_mb === 0;
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-8 py-8">
@@ -1195,6 +1199,16 @@ export function SettingsPage() {
                               Quantized
                             </span>
                           )}
+                          {coremlStatus?.supported && model.coreml_size_mb > 0 && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 ml-2">
+                              CoreML
+                            </span>
+                          )}
+                          {coremlStatus?.supported && model.coreml_size_mb === 0 && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700/50 text-stone-500 dark:text-stone-400 ml-2">
+                              CPU only
+                            </span>
+                          )}
                         </div>
                       </label>
 
@@ -1277,8 +1291,26 @@ export function SettingsPage() {
                 {(settings.transcription.use_coreml ?? true) && (
                   <div className="space-y-2">
                     <p className="text-xs text-stone-400 dark:text-stone-500 mb-2">
-                      CoreML encoders accelerate your selected speech model via Apple Neural Engine. Each encoder requires its corresponding base model above.
+                      CoreML encoders accelerate speech models via Apple Neural Engine. Turbo and quantized models use optimized CPU inference instead and don't require CoreML encoders.
                     </p>
+                    {selectedModelLacksCoreml && selectedModelInfo && (
+                      <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                        <svg className="w-4 h-4 text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                        </svg>
+                        <div>
+                          <p className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                            {selectedModelInfo.name} uses CPU-only inference
+                          </p>
+                          <p className="text-xs text-blue-600 dark:text-blue-400/70 mt-0.5">
+                            {selectedModelInfo.id.includes('turbo')
+                              ? 'Turbo models have a pruned decoder (4 layers vs 32) for fast inference without CoreML.'
+                              : 'Quantized models use reduced precision for smaller size and faster inference without CoreML.'
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {models.filter(m => m.downloaded && m.coreml_size_mb > 0).map(model => {
                       const isActiveModel = settings.transcription.model_size === model.id;
                       const coremlProgress = downloadProgress[`coreml:${model.id}`];
