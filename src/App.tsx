@@ -13,6 +13,7 @@ function App() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
+  const [isPreloading, setIsPreloading] = useState(false);
   const { settings, loadSettings } = useStore();
 
   // Use refs to avoid stale closures in event listeners
@@ -213,6 +214,25 @@ function App() {
       setAudioLevel(event.payload);
     });
 
+    // Handle model preloading status events
+    const unlistenPreloadStart = listen<string>('model-preload-start', (event) => {
+      console.log(`Model preload started: ${event.payload}`);
+      setIsPreloading(true);
+    });
+
+    const unlistenPreloadComplete = listen<{ model: string; elapsed_secs: number }>('model-preload-complete', (event) => {
+      console.log(`Model preload complete: ${event.payload.model} in ${event.payload.elapsed_secs.toFixed(1)}s`);
+      setIsPreloading(false);
+    });
+
+    const unlistenPreloadError = listen<{ model: string; error: string }>('model-preload-error', (event) => {
+      console.error(`Model preload failed: ${event.payload.error}`);
+      setIsPreloading(false);
+      // Show a brief error then clear it — preload failure is non-fatal
+      setError(`Model warmup failed`);
+      setTimeout(() => setError(null), 3000);
+    });
+
     // Handle model needs download - auto-download on startup
     const unlistenModelDownload = listen<string>('model-needs-download', async (event) => {
       const modelSize = event.payload;
@@ -238,6 +258,9 @@ function App() {
       unlistenProcessing.then((f) => f());
       unlistenComplete.then((f) => f());
       unlistenAudioLevel.then((f) => f());
+      unlistenPreloadStart.then((f) => f());
+      unlistenPreloadComplete.then((f) => f());
+      unlistenPreloadError.then((f) => f());
       unlistenModelDownload.then((f) => f());
     };
   }, [startRecording, stopRecording]);
@@ -260,6 +283,7 @@ function App() {
       <DictationBar
         isRecording={isRecording}
         isProcessing={isProcessing || isDownloadingModel}
+        isPreloading={isPreloading}
         audioLevel={audioLevel}
         error={error}
         statusOverride={isDownloadingModel ? 'Downloading model...' : undefined}

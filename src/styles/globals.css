@@ -191,6 +191,90 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+/* ---- Initializing State: Warm-up Glow ---- */
+.wispr-initializing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.wispr-init-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+}
+
+.wispr-init-bar {
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(245, 181, 79, 0.7);
+  animation: wispr-init-pulse 1.8s ease-in-out infinite;
+}
+
+.wispr-init-bar:nth-child(1) { height: 6px; animation-delay: 0s; }
+.wispr-init-bar:nth-child(2) { height: 10px; animation-delay: 0.15s; }
+.wispr-init-bar:nth-child(3) { height: 14px; animation-delay: 0.3s; }
+.wispr-init-bar:nth-child(4) { height: 10px; animation-delay: 0.45s; }
+.wispr-init-bar:nth-child(5) { height: 6px; animation-delay: 0.6s; }
+
+@keyframes wispr-init-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scaleY(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.wispr-init-label {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(245, 181, 79, 0.8);
+  white-space: nowrap;
+  animation: wispr-init-text-fade 2s ease-in-out infinite;
+}
+
+@keyframes wispr-init-text-fade {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Pill modifier for initializing state */
+.wispr-pill.initializing {
+  min-width: 130px;
+  background: rgba(25, 22, 18, 0.95);
+  border: 1px solid rgba(245, 181, 79, 0.15);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Smooth transition when initializing completes */
+.wispr-pill.init-complete {
+  animation: wispr-init-done 0.5s ease-out forwards;
+}
+
+@keyframes wispr-init-done {
+  0% {
+    min-width: 130px;
+    border-color: rgba(245, 181, 79, 0.15);
+  }
+  50% {
+    border-color: rgba(74, 222, 128, 0.4);
+  }
+  100% {
+    min-width: 90px;
+    border-color: transparent;
+  }
+}
+
 /* ============================================
    DASHBOARD THEME STYLES
    ============================================ */

@@ -1037,27 +1037,44 @@ pub fn run() {
             // Preload Whisper model in background so first transcription is fast
             if model_downloaded {
                 let preload_model_size = configured_model.to_string();
+                let preload_app_handle = app_handle.clone();
                 std::thread::spawn(move || {
                     log::info!(
                         "Background preload: starting for model '{}'",
                         preload_model_size
                     );
+
+                    // Emit preload-start event to all windows
+                    preload_app_handle.emit("model-preload-start", &preload_model_size).ok();
+
                     let start = std::time::Instant::now();
                     match transcription::whisper::preload_model(&preload_model_size) {
                         Ok(()) => {
+                            let elapsed = start.elapsed().as_secs_f64();
                             log::info!(
                                 "Background preload: model '{}' ready in {:.2}s",
                                 preload_model_size,
-                                start.elapsed().as_secs_f64()
+                                elapsed
                             );
+                            // Emit preload-complete event to all windows
+                            preload_app_handle.emit("model-preload-complete", serde_json::json!({
+                                "model": &preload_model_size,
+                                "elapsed_secs": elapsed,
+                            })).ok();
                         }
                         Err(e) => {
+                            let elapsed = start.elapsed().as_secs_f64();
                             log::error!(
                                 "Background preload: failed for model '{}' after {:.2}s: {}",
                                 preload_model_size,
-                                start.elapsed().as_secs_f64(),
+                                elapsed,
                                 e
                             );
+                            // Emit preload-error event to all windows
+                            preload_app_handle.emit("model-preload-error", serde_json::json!({
+                                "model": &preload_model_size,
+                                "error": e.to_string(),
+                            })).ok();
                         }
                     }
                 });

@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 interface DictationBarProps {
   isRecording: boolean;
   isProcessing: boolean;
+  isPreloading?: boolean;
   audioLevel?: number;
   error?: string | null;
   statusOverride?: string;
@@ -15,6 +16,7 @@ interface DictationBarProps {
 export const DictationBar: FC<DictationBarProps> = ({
   isRecording,
   isProcessing,
+  isPreloading = false,
   audioLevel = 0,
   error = null,
   draggable = false,
@@ -23,11 +25,24 @@ export const DictationBar: FC<DictationBarProps> = ({
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
   const [isHovered, setIsHovered] = useState(false);
+  const [initComplete, setInitComplete] = useState(false);
+  const prevPreloadingRef = useRef(isPreloading);
   const widgetRef = useRef<HTMLDivElement>(null);
   const prevLevelsRef = useRef<number[]>(Array(9).fill(0.3));
   const targetHeightsRef = useRef<number[]>(Array(9).fill(0.3));
   const lastUpdateRef = useRef(0);
   const prevDraggableRef = useRef(draggable);
+
+  // Detect preloading completion for smooth transition animation
+  useEffect(() => {
+    if (prevPreloadingRef.current && !isPreloading) {
+      // Preload just finished — show brief completion flash
+      setInitComplete(true);
+      const timer = setTimeout(() => setInitComplete(false), 600);
+      return () => clearTimeout(timer);
+    }
+    prevPreloadingRef.current = isPreloading;
+  }, [isPreloading]);
 
   // Log draggable prop changes — forward to Rust terminal
   useEffect(() => {
@@ -166,6 +181,20 @@ export const DictationBar: FC<DictationBarProps> = ({
     </div>
   );
 
+  // Render initializing state - warm-up glow bars
+  const renderInitializing = () => (
+    <div className="wispr-initializing">
+      <div className="wispr-init-bars">
+        <div className="wispr-init-bar" />
+        <div className="wispr-init-bar" />
+        <div className="wispr-init-bar" />
+        <div className="wispr-init-bar" />
+        <div className="wispr-init-bar" />
+      </div>
+      <span className="wispr-init-label">Warming up</span>
+    </div>
+  );
+
   // Render recording state - vertical waveform bars
   const renderRecording = () => (
     <div className="wispr-waveform">
@@ -203,7 +232,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   return (
     <div
       ref={widgetRef}
-      className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''}`}
+      className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
       style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
       onMouseDown={handleMouseDown}
       onPointerEnter={handlePointerEnter}
@@ -215,6 +244,7 @@ export const DictationBar: FC<DictationBarProps> = ({
         {error ? renderError() :
          isProcessing ? renderProcessing() :
          isRecording ? renderRecording() :
+         isPreloading ? renderInitializing() :
          renderIdle()}
       </div>
     </div>
