@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useStore, UserSettings } from '../../lib/store';
 import { useTheme } from '../../lib/theme';
 
@@ -125,12 +126,19 @@ const ClearIcon = () => (
   </svg>
 );
 
+const TrashIcon = () => (
+  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+  </svg>
+);
+
 interface ModelInfo {
   id: string;
   name: string;
   size_mb: number;
   downloaded: boolean;
   coreml_downloaded: boolean;
+  coreml_size_mb: number;
 }
 
 interface CoremlStatus {
@@ -921,10 +929,26 @@ export function SettingsPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [coremlStatus, setCoremlStatus] = useState<CoremlStatus | null>(null);
   const [downloadingCoreml, setDownloadingCoreml] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     loadModels();
     loadCoremlStatus();
+  }, []);
+
+  // Listen for download progress events from the backend
+  useEffect(() => {
+    const unlisten = listen<{ model_type: string; model_id: string; percent: number }>(
+      'download-progress',
+      (event) => {
+        const key = `${event.payload.model_type}:${event.payload.model_id}`;
+        setDownloadProgress((prev) => ({ ...prev, [key]: event.payload.percent }));
+      }
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   async function loadCoremlStatus() {
@@ -947,6 +971,7 @@ export function SettingsPage() {
 
   async function downloadModel(modelId: string) {
     setDownloading(modelId);
+    setDownloadProgress((prev) => ({ ...prev, [`ggml:${modelId}`]: 0 }));
     try {
       await invoke('download_model', { size: modelId });
       await loadModels();
@@ -954,10 +979,16 @@ export function SettingsPage() {
       console.error('Failed to download model:', error);
     }
     setDownloading(null);
+    setDownloadProgress((prev) => {
+      const next = { ...prev };
+      delete next[`ggml:${modelId}`];
+      return next;
+    });
   }
 
   async function downloadCoremlModel(modelId: string) {
     setDownloadingCoreml(modelId);
+    setDownloadProgress((prev) => ({ ...prev, [`coreml:${modelId}`]: 0 }));
     try {
       await invoke('download_coreml_model', { size: modelId });
       await loadModels();
@@ -965,6 +996,44 @@ export function SettingsPage() {
       console.error('Failed to download CoreML model:', error);
     }
     setDownloadingCoreml(null);
+    setDownloadProgress((prev) => {
+      const next = { ...prev };
+      delete next[`coreml:${modelId}`];
+      return next;
+    });
+  }
+
+  async function handleDeleteModel(modelId: string) {
+    if (deleting) return;
+    setDeleting(`ggml:${modelId}`);
+    try {
+      await invoke('delete_model', { size: modelId });
+      // If deleted model was selected, clear selection
+      if (settings?.transcription.model_size === modelId) {
+        handleChange('transcription', 'model_size', '');
+      }
+      await loadModels();
+    } catch (error) {
+      console.error('Failed to delete model:', error);
+    }
+    setDeleting(null);
+  }
+
+  async function handleDeleteCoremlModel(modelId: string) {
+    if (deleting) return;
+    setDeleting(`coreml:${modelId}`);
+    try {
+      await invoke('delete_coreml_model', { size: modelId });
+      await loadModels();
+    } catch (error) {
+      console.error('Failed to delete CoreML model:', error);
+    }
+    setDeleting(null);
+  }
+
+  function formatSize(mb: number): string {
+    if (mb >= 1000) return `${(mb / 1000).toFixed(1)}GB`;
+    return `${mb}MB`;
   }
 
   function handleChange<K extends keyof UserSettings>(
@@ -1086,67 +1155,83 @@ export function SettingsPage() {
                 Speech Model
               </label>
               <div className="space-y-2">
-                {models.map((model) => (
-                  <div
-                    key={model.id}
-                    className={`
-                      flex items-center justify-between p-3 rounded-xl border transition-all duration-200
-                      ${settings.transcription.model_size === model.id
-                        ? 'border-amber-500 dark:border-amber-400 bg-amber-50 dark:bg-amber-900/20'
-                        : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
-                      }
-                    `}
-                  >
-                    <label className="flex items-center gap-3 cursor-pointer flex-1">
-                      <input
-                        type="radio"
-                        name="model"
-                        checked={settings.transcription.model_size === model.id}
-                        onChange={() => handleChange('transcription', 'model_size', model.id)}
-                        disabled={!model.downloaded}
-                        className="w-4 h-4 text-amber-500 focus:ring-amber-500/20 border-stone-300 dark:border-stone-600"
-                      />
-                      <div>
-                        <span className={`text-sm font-medium ${model.downloaded ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-500'}`}>
-                          {model.name}
-                        </span>
-                        <span className="text-xs text-stone-500 dark:text-stone-400 ml-2">
-                          ({model.size_mb}MB)
-                        </span>
-                      </div>
-                    </label>
+                {models.map((model) => {
+                  const ggmlProgress = downloadProgress[`ggml:${model.id}`];
+                  const isSelected = settings.transcription.model_size === model.id;
+                  return (
+                    <div
+                      key={model.id}
+                      className={`
+                        flex items-center justify-between p-3 rounded-xl border transition-all duration-200
+                        ${isSelected
+                          ? 'border-amber-500 dark:border-amber-400 bg-amber-50 dark:bg-amber-900/20'
+                          : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
+                        }
+                      `}
+                    >
+                      <label className="flex items-center gap-3 cursor-pointer flex-1">
+                        <input
+                          type="radio"
+                          name="model"
+                          checked={isSelected}
+                          onChange={() => handleChange('transcription', 'model_size', model.id)}
+                          disabled={!model.downloaded}
+                          className="w-4 h-4 text-amber-500 focus:ring-amber-500/20 border-stone-300 dark:border-stone-600"
+                        />
+                        <div>
+                          <span className={`text-sm font-medium ${model.downloaded ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-500'}`}>
+                            {model.name}
+                          </span>
+                          <span className="text-xs text-stone-500 dark:text-stone-400 ml-2">
+                            ({model.size_mb}MB)
+                          </span>
+                        </div>
+                      </label>
 
-                    {model.downloaded ? (
-                      <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
-                        <CheckIcon />
-                        Ready
-                      </span>
-                    ) : downloading === model.id ? (
-                      <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Downloading...
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => downloadModel(model.id)}
-                        className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        <DownloadIcon />
-                        Download
-                      </button>
-                    )}
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        {model.downloaded ? (
+                          <>
+                            <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
+                              <CheckIcon />
+                              Ready
+                            </span>
+                            <button
+                              onClick={() => handleDeleteModel(model.id)}
+                              disabled={deleting === `ggml:${model.id}`}
+                              className="p-1.5 rounded-lg text-stone-400 dark:text-stone-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                              title={`Delete ${model.name}`}
+                            >
+                              <TrashIcon />
+                            </button>
+                          </>
+                        ) : downloading === model.id ? (
+                          <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            {ggmlProgress != null ? `${ggmlProgress}%` : 'Downloading...'}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => downloadModel(model.id)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
+                          >
+                            <DownloadIcon />
+                            Download
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             {/* CoreML Acceleration */}
             {coremlStatus?.supported && (
               <div className="pt-4 border-t border-stone-100 dark:border-stone-700">
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
@@ -1181,52 +1266,94 @@ export function SettingsPage() {
 
                 {(settings.transcription.use_coreml ?? true) && (
                   <div className="space-y-2">
-                    {models.filter(m => m.downloaded).map(model => (
-                      <div
-                        key={model.id}
-                        className={`
-                          flex items-center justify-between p-3 rounded-xl border transition-all duration-200
-                          ${model.coreml_downloaded
-                            ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
-                            : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
-                          }
-                        `}
-                      >
-                        <div>
-                          <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
-                            CoreML Encoder ({model.id})
-                          </span>
-                          <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-                            {model.coreml_downloaded
-                              ? 'Neural Engine acceleration active'
-                              : 'Download to enable hardware acceleration'
+                    <p className="text-xs text-stone-400 dark:text-stone-500 mb-2">
+                      CoreML encoders accelerate your selected speech model via Apple Neural Engine. Each encoder requires its corresponding base model above.
+                    </p>
+                    {models.filter(m => m.downloaded).map(model => {
+                      const isActiveModel = settings.transcription.model_size === model.id;
+                      const coremlProgress = downloadProgress[`coreml:${model.id}`];
+                      return (
+                        <div
+                          key={model.id}
+                          className={`
+                            flex items-center justify-between p-3 rounded-xl border transition-all duration-200
+                            ${model.coreml_downloaded && isActiveModel
+                              ? 'border-green-400 dark:border-green-600 bg-green-50 dark:bg-green-900/20'
+                              : model.coreml_downloaded
+                                ? 'border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800/30'
+                                : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50'
                             }
-                          </p>
+                          `}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
+                                {model.id}
+                              </span>
+                              <span className="text-xs text-stone-400 dark:text-stone-500">
+                                {formatSize(model.coreml_size_mb)}
+                              </span>
+                              {isActiveModel && (
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                              {model.coreml_downloaded
+                                ? isActiveModel
+                                  ? 'Neural Engine acceleration active'
+                                  : 'Downloaded, will be used when this model is selected'
+                                : 'Download to enable hardware acceleration'
+                              }
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 ml-3">
+                            {model.coreml_downloaded ? (
+                              <>
+                                <span className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg ${
+                                  isActiveModel
+                                    ? 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30'
+                                    : 'text-stone-500 dark:text-stone-400 bg-stone-100 dark:bg-stone-700/50'
+                                }`}>
+                                  <CheckIcon />
+                                  {isActiveModel ? 'In Use' : 'Ready'}
+                                </span>
+                                <button
+                                  onClick={() => handleDeleteCoremlModel(model.id)}
+                                  disabled={deleting === `coreml:${model.id}`}
+                                  className="p-1.5 rounded-lg text-stone-400 dark:text-stone-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                  title={`Delete CoreML encoder (${model.id})`}
+                                >
+                                  <TrashIcon />
+                                </button>
+                              </>
+                            ) : downloadingCoreml === model.id ? (
+                              <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                </svg>
+                                {coremlProgress != null
+                                  ? coremlProgress >= 99
+                                    ? 'Extracting...'
+                                    : `${coremlProgress}%`
+                                  : 'Downloading...'
+                                }
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => downloadCoremlModel(model.id)}
+                                className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
+                              >
+                                <DownloadIcon />
+                                Download
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        {model.coreml_downloaded ? (
-                          <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
-                            <CheckIcon />
-                            Active
-                          </span>
-                        ) : downloadingCoreml === model.id ? (
-                          <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
-                            Downloading...
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => downloadCoremlModel(model.id)}
-                            className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
-                          >
-                            <DownloadIcon />
-                            Download
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
