@@ -349,6 +349,100 @@ pub async fn download_coreml_model(
     Ok(())
 }
 
+/// Preload the Whisper model into MODEL_CACHE so the first transcription is fast.
+///
+/// This loads the GGML model file from disk, initializes the Metal/CoreML GPU backend,
+/// and calls `create_state()` once to trigger any first-run CoreML model compilation.
+/// The state is then discarded — only the context is kept cached.
+///
+/// Safe to call from a background thread via `std::thread::spawn` or `spawn_blocking`.
+/// If the model is already cached with the same size, this is a no-op.
+pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
+    let model_path = get_model_path(model_size);
+
+    if !model_path.exists() {
+        return Err(WhisperError::ModelNotFound(format!(
+            "Model '{}' not found at {:?}",
+            model_size, model_path
+        )));
+    }
+
+    let total_start = std::time::Instant::now();
+
+    // Lock the cache and check if we already have this model loaded
+    let mut cache = MODEL_CACHE
+        .lock()
+        .map_err(|e| WhisperError::TranscriptionError(format!("Cache lock error: {}", e)))?;
+
+    if cache.context.is_some()
+        && cache.model_size == model_size
+        && cache.model_path == model_path
+    {
+        log::info!(
+            "preload_model: model '{}' already cached, skipping",
+            model_size
+        );
+        return Ok(());
+    }
+
+    // Load the model
+    log::info!(
+        "preload_model: loading '{}' from {:?}",
+        model_size,
+        model_path
+    );
+    let load_start = std::time::Instant::now();
+
+    let mut ctx_params = WhisperContextParameters::default();
+    ctx_params.flash_attn(true);
+
+    let ctx = WhisperContext::new_with_params(
+        model_path.to_str().unwrap(),
+        ctx_params,
+    )
+    .map_err(|e| WhisperError::TranscriptionError(format!("Failed to load model: {}", e)))?;
+
+    let load_elapsed = load_start.elapsed();
+    log::info!(
+        "preload_model: model loaded in {:.2}s",
+        load_elapsed.as_secs_f64()
+    );
+
+    // Call create_state() once to trigger CoreML first-run compilation.
+    // This can take 5-30s on first run for a device, but is fast on subsequent runs.
+    // The state is discarded — we only want the side effect of CoreML compilation.
+    let state_start = std::time::Instant::now();
+    let _state = ctx
+        .create_state()
+        .map_err(|e| {
+            WhisperError::TranscriptionError(format!(
+                "Failed to create state during preload: {}",
+                e
+            ))
+        })?;
+    let state_elapsed = state_start.elapsed();
+    log::info!(
+        "preload_model: state created (CoreML warmup) in {:.2}s",
+        state_elapsed.as_secs_f64()
+    );
+    drop(_state);
+
+    // Store in cache
+    cache.context = Some(ctx);
+    cache.model_size = model_size.to_string();
+    cache.model_path = model_path;
+
+    let total_elapsed = total_start.elapsed();
+    log::info!(
+        "preload_model: complete in {:.2}s (load={:.2}s, state={:.2}s)",
+        total_elapsed.as_secs_f64(),
+        load_elapsed.as_secs_f64(),
+        state_elapsed.as_secs_f64()
+    );
+
+    Ok(())
+}
+
 pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<String, WhisperError> {
     let model_size = settings
         .transcription
@@ -387,6 +481,8 @@ fn run_whisper(
 ) -> Result<String, WhisperError> {
     use whisper_rs::{FullParams, SamplingStrategy};
 
+    let run_start = std::time::Instant::now();
+
     // Get or create the cached context
     let mut cache = MODEL_CACHE
         .lock()
@@ -401,6 +497,8 @@ fn run_whisper(
             model_path
         );
 
+        let load_start = std::time::Instant::now();
+
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.flash_attn(true);
 
@@ -414,7 +512,10 @@ fn run_whisper(
         cache.model_size = model_size.to_string();
         cache.model_path = model_path.clone();
 
-        log::info!("Whisper model loaded and cached");
+        log::info!(
+            "Whisper model loaded and cached in {:.2}s",
+            load_start.elapsed().as_secs_f64()
+        );
     } else {
         log::info!("Using cached Whisper model: {}", model_size);
     }
@@ -422,9 +523,14 @@ fn run_whisper(
     // Use the cached context
     let ctx = cache.context.as_ref().unwrap();
 
+    let state_start = std::time::Instant::now();
     let mut state = ctx
         .create_state()
         .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+    log::info!(
+        "Whisper state created in {:.2}s",
+        state_start.elapsed().as_secs_f64()
+    );
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -451,13 +557,19 @@ fn run_whisper(
     params.set_print_timestamps(false);
     params.set_token_timestamps(false);
 
+    let inference_start = std::time::Instant::now();
     state
         .full(params, samples)
         .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+    let inference_elapsed = inference_start.elapsed();
 
     let num_segments = state.full_n_segments();
 
-    log::info!("Whisper found {} segments", num_segments);
+    log::info!(
+        "Whisper inference complete in {:.2}s, found {} segments",
+        inference_elapsed.as_secs_f64(),
+        num_segments
+    );
 
     let mut text = String::new();
     for i in 0..num_segments {
@@ -472,8 +584,10 @@ fn run_whisper(
     }
 
     let result = text.trim().to_string();
+    let total_elapsed = run_start.elapsed();
     log::info!(
-        "Whisper transcription result: '{}' ({} chars)",
+        "Whisper transcription complete in {:.2}s — result: '{}' ({} chars)",
+        total_elapsed.as_secs_f64(),
         if result.len() > 100 {
             format!("{}...", &result[..100])
         } else {

@@ -1034,6 +1034,35 @@ pub fn run() {
                 app_handle.emit("model-needs-download", configured_model).ok();
             }
 
+            // Preload Whisper model in background so first transcription is fast
+            if model_downloaded {
+                let preload_model_size = configured_model.to_string();
+                std::thread::spawn(move || {
+                    log::info!(
+                        "Background preload: starting for model '{}'",
+                        preload_model_size
+                    );
+                    let start = std::time::Instant::now();
+                    match transcription::whisper::preload_model(&preload_model_size) {
+                        Ok(()) => {
+                            log::info!(
+                                "Background preload: model '{}' ready in {:.2}s",
+                                preload_model_size,
+                                start.elapsed().as_secs_f64()
+                            );
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Background preload: failed for model '{}' after {:.2}s: {}",
+                                preload_model_size,
+                                start.elapsed().as_secs_f64(),
+                                e
+                            );
+                        }
+                    }
+                });
+            }
+
             // Show dictation window and convert to NSPanel
             if let Some(window) = app.get_webview_window("dictation") {
                 window.show().ok();
