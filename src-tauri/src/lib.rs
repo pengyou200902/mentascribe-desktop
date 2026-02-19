@@ -739,9 +739,11 @@ fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json)
-const DICTATION_WINDOW_WIDTH: f64 = 340.0;
-const DICTATION_WINDOW_HEIGHT: f64 = 120.0;
+/// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json).
+/// These are initial/fallback values; the frontend dynamically resizes the window to match
+/// the pill widget, so native positioning uses the actual window frame size instead.
+const DICTATION_WINDOW_WIDTH: f64 = 140.0;
+const DICTATION_WINDOW_HEIGHT: f64 = 48.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
 const DOCK_OFFSET: f64 = 20.0;
 
@@ -812,9 +814,11 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
             })?;
         let visible_frame = target_visible_frame.unwrap();
 
+        // Get actual window frame (frontend dynamically resizes to match pill)
+        let win_frame: NSRect = msg_send![&*panel, frame];
+
         if only_if_different_monitor {
             // Check if window center is already on the target screen
-            let win_frame: NSRect = msg_send![&*panel, frame];
             let cx = win_frame.origin.x + win_frame.size.x / 2.0;
             let cy = win_frame.origin.y + win_frame.size.y / 2.0;
 
@@ -833,10 +837,11 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
                 screen_frame.size.x, screen_frame.size.y);
         }
 
-        // Calculate bottom-center in AppKit coordinates.
+        // Calculate bottom-center in AppKit coordinates using actual window width.
         // visibleFrame already excludes dock and menu bar areas.
         // In AppKit, origin.y is the bottom edge, so we add DOCK_OFFSET above it.
-        let x = visible_frame.origin.x + (visible_frame.size.x - DICTATION_WINDOW_WIDTH) / 2.0;
+        let actual_width = if win_frame.size.x > 0.0 { win_frame.size.x } else { DICTATION_WINDOW_WIDTH };
+        let x = visible_frame.origin.x + (visible_frame.size.x - actual_width) / 2.0;
         let y = visible_frame.origin.y + DOCK_OFFSET;
 
         eprintln!("[native_pos] Positioning on screen {} — mouse: ({:.1}, {:.1}), target: ({:.1}, {:.1}), visible: origin({:.1},{:.1}) size({:.1}x{:.1})",
@@ -922,7 +927,7 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         let screen_pos = monitor.position();
         let screen_size = monitor.size();
         let current_pos = window.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
-        let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(340, 120));
+        let actual_window_size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(140, 48));
         let window_center_x = current_pos.x + actual_window_size.width as i32 / 2;
         let window_center_y = current_pos.y + actual_window_size.height as i32 / 2;
         let window_on_same_monitor =
@@ -934,8 +939,9 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
             let scale = monitor.scale_factor();
             let pos = monitor.position();
             let size = monitor.size();
-            let ww = (DICTATION_WINDOW_WIDTH * scale) as i32;
-            let wh = (DICTATION_WINDOW_HEIGHT * scale) as i32;
+            // Use actual window size (frontend dynamically resizes to match pill)
+            let ww = actual_window_size.width as i32;
+            let wh = actual_window_size.height as i32;
             let doff = (DOCK_OFFSET * scale) as i32;
             let x = pos.x + (size.width as i32 - ww) / 2;
             let y = pos.y + size.height as i32 - wh - doff;

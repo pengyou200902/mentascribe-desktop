@@ -1,5 +1,6 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 import { invoke } from '@tauri-apps/api/core';
 
 interface DictationBarProps {
@@ -156,6 +157,23 @@ export const DictationBar: FC<DictationBarProps> = ({
 
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
+
+  // Dynamically resize the Tauri window to match the pill dimensions
+  // so there are no invisible boundaries around the widget
+  useEffect(() => {
+    if (!widgetRef.current) return;
+    const win = getCurrentWindow();
+    const observer = new ResizeObserver(() => {
+      if (!widgetRef.current) return;
+      const w = widgetRef.current.offsetWidth;
+      const h = widgetRef.current.offsetHeight;
+      if (w > 0 && h > 0) {
+        win.setSize(new LogicalSize(w, h)).catch(() => {});
+      }
+    });
+    observer.observe(widgetRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   // Helper to forward logs to Rust terminal (fire-and-forget)
   const flog = useCallback((msg: string) => {
