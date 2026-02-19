@@ -6,6 +6,7 @@ export interface TranscriptionSettings {
   language?: string;
   model_size?: string;
   cloud_provider?: string;
+  use_coreml?: boolean | null;
 }
 
 export interface CleanupSettings {
