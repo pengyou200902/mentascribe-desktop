@@ -37,6 +37,14 @@ const TrashIcon = () => (
   </svg>
 );
 
+const ArrowRightIcon = () => (
+  <svg className="w-3.5 h-3.5 text-stone-400 dark:text-stone-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+  </svg>
+);
+
+type EntryMode = 'word' | 'correct';
+
 interface EditModalProps {
   entry?: DictionaryEntry;
   onSave: (phrase: string, replacement: string) => void;
@@ -44,48 +52,109 @@ interface EditModalProps {
 }
 
 function EditModal({ entry, onSave, onCancel }: EditModalProps) {
-  const [phrase, setPhrase] = useState(entry?.phrase ?? '');
-  const [replacement, setReplacement] = useState(entry?.replacement ?? '');
+  const isVocabularyEntry = entry ? entry.phrase === entry.replacement : true;
+  const [mode, setMode] = useState<EntryMode>(isVocabularyEntry ? 'word' : 'correct');
+  const [word, setWord] = useState(entry && isVocabularyEntry ? entry.phrase : '');
+  const [phrase, setPhrase] = useState(entry && !isVocabularyEntry ? entry.phrase : '');
+  const [replacement, setReplacement] = useState(entry && !isVocabularyEntry ? entry.replacement : '');
+
+  const isValid = mode === 'word'
+    ? word.trim().length > 0
+    : phrase.trim().length > 0 && replacement.trim().length > 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (phrase.trim() && replacement.trim()) {
+    if (!isValid) return;
+    if (mode === 'word') {
+      onSave(word.trim(), word.trim());
+    } else {
       onSave(phrase.trim(), replacement.trim());
     }
   };
 
+  const inputClass = "w-full px-4 py-2.5 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 dark:focus:border-amber-400 transition-all duration-200";
+
   return (
     <div className="fixed inset-0 bg-black/30 dark:bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white dark:bg-stone-800 rounded-2xl p-6 w-full max-w-md shadow-xl border border-stone-200 dark:border-stone-700 animate-scale-in">
-        <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100 mb-6">
+        <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100 mb-5">
           {entry ? 'Edit entry' : 'Add entry'}
         </h3>
+
+        {/* Segmented control */}
+        <div className="flex p-1 bg-stone-100 dark:bg-stone-700/50 rounded-xl mb-5">
+          <button
+            type="button"
+            onClick={() => setMode('word')}
+            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+              mode === 'word'
+                ? 'bg-white dark:bg-stone-600 text-stone-900 dark:text-stone-100 shadow-sm'
+                : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
+            }`}
+          >
+            Custom word
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('correct')}
+            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+              mode === 'correct'
+                ? 'bg-white dark:bg-stone-600 text-stone-900 dark:text-stone-100 shadow-sm'
+                : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
+            }`}
+          >
+            Auto-correct
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-              Phrase
-            </label>
-            <input
-              type="text"
-              value={phrase}
-              onChange={(e) => setPhrase(e.target.value)}
-              placeholder="What you say (e.g., mentaflux)"
-              className="w-full px-4 py-2.5 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 dark:focus:border-amber-400 transition-all duration-200"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-              Replacement
-            </label>
-            <input
-              type="text"
-              value={replacement}
-              onChange={(e) => setReplacement(e.target.value)}
-              placeholder="Corrected spelling (e.g., MentaFlux)"
-              className="w-full px-4 py-2.5 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 dark:focus:border-amber-400 transition-all duration-200"
-            />
-          </div>
+          {mode === 'word' ? (
+            <div>
+              <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                Word or phrase
+              </label>
+              <input
+                type="text"
+                value={word}
+                onChange={(e) => setWord(e.target.value)}
+                placeholder="e.g., MentaFlux, Dr. Müller"
+                className={inputClass}
+                autoFocus
+              />
+              <p className="mt-2 text-xs text-stone-400 dark:text-stone-500">
+                Ensures this word is transcribed with the exact spelling you provide.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  When transcribed as
+                </label>
+                <input
+                  type="text"
+                  value={phrase}
+                  onChange={(e) => setPhrase(e.target.value)}
+                  placeholder="e.g., mental flux"
+                  className={inputClass}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Replace with
+                </label>
+                <input
+                  type="text"
+                  value={replacement}
+                  onChange={(e) => setReplacement(e.target.value)}
+                  placeholder="e.g., MentaFlux"
+                  className={inputClass}
+                />
+              </div>
+            </>
+          )}
+
           <div className="flex gap-3 justify-end pt-4">
             <button
               type="button"
@@ -96,7 +165,7 @@ function EditModal({ entry, onSave, onCancel }: EditModalProps) {
             </button>
             <button
               type="submit"
-              disabled={!phrase.trim() || !replacement.trim()}
+              disabled={!isValid}
               className="px-5 py-2.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-white rounded-xl transition-colors shadow-sm"
             >
               {entry ? 'Save changes' : 'Add entry'}
@@ -201,8 +270,8 @@ export function DictionaryPage() {
               </svg>
             </div>
             <p className="text-sm text-stone-600 dark:text-stone-300">
-              Add words that are frequently misrecognized. When transcribed text contains a matching phrase,
-              it will be automatically replaced with your correction.
+              Add custom words and names for accurate transcription, or set up auto-corrections
+              for commonly misrecognized phrases.
             </p>
           </div>
         </div>
@@ -227,7 +296,7 @@ export function DictionaryPage() {
               No dictionary entries
             </h3>
             <p className="text-sm text-stone-500 dark:text-stone-400 max-w-sm mx-auto mb-5">
-              Add custom phrases to improve transcription accuracy
+              Add custom words for better recognition or auto-corrections for misrecognized phrases
             </p>
             <button
               onClick={handleAdd}
@@ -242,10 +311,7 @@ export function DictionaryPage() {
               <thead>
                 <tr className="border-b border-stone-100 dark:border-stone-800">
                   <th className="text-left text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-wider px-4 py-3">
-                    Phrase
-                  </th>
-                  <th className="text-left text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-wider px-4 py-3">
-                    Replacement
+                    Entry
                   </th>
                   <th className="text-center text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-wider px-4 py-3 w-20">
                     Active
@@ -254,68 +320,83 @@ export function DictionaryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
-                {entries.map((entry, index) => (
-                  <tr
-                    key={entry.id}
-                    className="transition-colors duration-150 hover:bg-stone-100/50 dark:hover:bg-stone-700/30 animate-fade-in"
-                    style={{ animationDelay: `${index * 0.03}s` }}
-                    onMouseEnter={() => setHoveredId(entry.id)}
-                    onMouseLeave={() => setHoveredId(null)}
-                  >
-                    <td className="px-4 py-3.5">
-                      <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                        {entry.phrase}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <span className="text-sm text-stone-600 dark:text-stone-400">
-                        {entry.replacement}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5 text-center">
-                      <button
-                        onClick={() => handleToggle(entry.id)}
-                        className={`
-                          relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200
-                          ${entry.enabled
-                            ? 'bg-amber-500 dark:bg-amber-400'
-                            : 'bg-stone-300 dark:bg-stone-600'
-                          }
-                        `}
-                      >
-                        <span
+                {entries.map((entry, index) => {
+                  const isVocabulary = entry.phrase === entry.replacement;
+                  return (
+                    <tr
+                      key={entry.id}
+                      className="transition-colors duration-150 hover:bg-stone-100/50 dark:hover:bg-stone-700/30 animate-fade-in"
+                      style={{ animationDelay: `${index * 0.03}s` }}
+                      onMouseEnter={() => setHoveredId(entry.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                    >
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-2.5">
+                          {isVocabulary ? (
+                            <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
+                              {entry.phrase}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-2 text-sm">
+                              <span className="font-medium text-stone-700 dark:text-stone-300">{entry.phrase}</span>
+                              <ArrowRightIcon />
+                              <span className="text-stone-600 dark:text-stone-400">{entry.replacement}</span>
+                            </span>
+                          )}
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
+                            isVocabulary
+                              ? 'bg-stone-100 dark:bg-stone-700/60 text-stone-400 dark:text-stone-500'
+                              : 'bg-stone-100 dark:bg-stone-700/60 text-stone-400 dark:text-stone-500'
+                          }`}>
+                            {isVocabulary ? 'word' : 'replace'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5 text-center">
+                        <button
+                          onClick={() => handleToggle(entry.id)}
                           className={`
-                            inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200
-                            ${entry.enabled ? 'translate-x-6' : 'translate-x-1'}
+                            relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200
+                            ${entry.enabled
+                              ? 'bg-amber-500 dark:bg-amber-400'
+                              : 'bg-stone-300 dark:bg-stone-600'
+                            }
                           `}
-                        />
-                      </button>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div
-                        className={`
-                          flex items-center gap-1 justify-end transition-all duration-200
-                          ${hoveredId === entry.id ? 'opacity-100' : 'opacity-0'}
-                        `}
-                      >
-                        <button
-                          onClick={() => handleEdit(entry)}
-                          className="p-2 bg-white dark:bg-stone-700 rounded-lg text-stone-400 dark:text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 shadow-sm transition-all duration-200"
-                          title="Edit"
                         >
-                          <EditIcon />
+                          <span
+                            className={`
+                              inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200
+                              ${entry.enabled ? 'translate-x-6' : 'translate-x-1'}
+                            `}
+                          />
                         </button>
-                        <button
-                          onClick={() => handleDelete(entry.id)}
-                          className="p-2 bg-white dark:bg-stone-700 rounded-lg text-stone-400 dark:text-stone-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm transition-all duration-200"
-                          title="Delete"
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div
+                          className={`
+                            flex items-center gap-1 justify-end transition-all duration-200
+                            ${hoveredId === entry.id ? 'opacity-100' : 'opacity-0'}
+                          `}
                         >
-                          <TrashIcon />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          <button
+                            onClick={() => handleEdit(entry)}
+                            className="p-2 bg-white dark:bg-stone-700 rounded-lg text-stone-400 dark:text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 shadow-sm transition-all duration-200"
+                            title="Edit"
+                          >
+                            <EditIcon />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(entry.id)}
+                            className="p-2 bg-white dark:bg-stone-700 rounded-lg text-stone-400 dark:text-stone-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm transition-all duration-200"
+                            title="Delete"
+                          >
+                            <TrashIcon />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
