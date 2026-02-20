@@ -1205,9 +1205,14 @@ export function SettingsPage() {
                           <span className="text-xs text-stone-500 dark:text-stone-400 ml-2">
                             ({formatSize(model.size_mb)})
                           </span>
-                          {model.id.includes('turbo') && (
+                          {(model.id.includes('turbo') || model.id.includes('distil')) && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 ml-2">
                               Fast
+                            </span>
+                          )}
+                          {model.id.includes('distil') && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400 ml-2">
+                              Distilled
                             </span>
                           )}
                           {model.id.includes('q5') && (
@@ -1326,7 +1331,9 @@ export function SettingsPage() {
                           <p className="text-xs text-blue-600 dark:text-blue-400/70 mt-0.5">
                             {selectedModelInfo.id.includes('turbo')
                               ? 'Turbo models have a pruned decoder (4 layers vs 32) optimized for fast inference. Metal GPU still accelerates the decoder.'
-                              : 'Quantized models use reduced precision for smaller size and faster inference. Metal GPU still accelerates the decoder.'
+                              : selectedModelInfo.id.includes('distil')
+                                ? 'Distil models use knowledge distillation (2 decoder layers) for the fastest inference. Metal GPU still accelerates the decoder.'
+                                : 'Quantized models use reduced precision for smaller size and faster inference. Metal GPU still accelerates the decoder.'
                             }
                           </p>
                         </div>

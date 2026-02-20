@@ -98,6 +98,7 @@ fn ggml_size_bytes(size: &str) -> u64 {
         "large-v3-turbo" => 1_500_000_000,
         "large-v3-turbo-q5_0" => 547_000_000,
         "large-v3-q5_0" => 1_100_000_000,
+        "distil-large-v3.5" => 756_000_000,
         _ => 0,
     }
 }
@@ -217,7 +218,26 @@ pub fn get_available_models() -> Vec<ModelInfo> {
             coreml_downloaded: false,
             coreml_size_mb: 0,
         },
+        ModelInfo {
+            id: "distil-large-v3.5".to_string(),
+            name: "Distil Large v3.5".to_string(),
+            size_mb: 756,
+            downloaded: models_dir.join("ggml-distil-large-v3.5.bin").exists(),
+            coreml_downloaded: false,
+            coreml_size_mb: 0,
+        },
     ]
+}
+
+/// Get the download URL for a model. Most models are in the ggerganov/whisper.cpp repo,
+/// but distil models are hosted in separate distil-whisper repos with different filenames.
+fn get_model_download_url(size: &str) -> String {
+    match size {
+        "distil-large-v3.5" => {
+            "https://huggingface.co/distil-whisper/distil-large-v3.5-ggml/resolve/main/ggml-model.bin".to_string()
+        }
+        _ => format!("{}/{}", MODEL_BASE_URL, get_model_filename(size)),
+    }
 }
 
 pub async fn download_model(
@@ -228,10 +248,10 @@ pub async fn download_model(
     std::fs::create_dir_all(&models_dir)?;
 
     let model_name = get_model_filename(size);
-    let url = format!("{}/{}", MODEL_BASE_URL, model_name);
+    let url = get_model_download_url(size);
     let path = models_dir.join(&model_name);
 
-    log::info!("Downloading model from {} to {:?}", url, path);
+    log::info!("Downloading model '{}' from {} to {:?}", size, url, path);
 
     let response = reqwest::get(&url)
         .await
@@ -557,6 +577,282 @@ fn vad_filter_speech(samples: &[f32]) -> Vec<f32> {
     speech_samples
 }
 
+// ======================= VAD-Triggered Streaming =======================
+//
+// During recording, a background VAD monitor thread periodically reads the
+// WHISPER_BUFFER, detects completed utterances (speech followed by silence),
+// and transcribes them immediately. On stop, only the remaining "tail" audio
+// needs transcription, reducing perceived latency from 1-3s to 200-500ms.
+
+/// Accumulated transcription text from completed utterances during recording.
+static STREAMING_RESULTS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// How many samples from the start of WHISPER_BUFFER have been fully
+/// transcribed by the streaming monitor. Used to compute the "tail" on stop.
+static STREAMING_CONSUMED: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
+
+/// Handle for the VAD monitor thread.
+struct VadMonitorHandle {
+    stop_sender: std::sync::mpsc::Sender<()>,
+    thread_handle: std::thread::JoinHandle<()>,
+}
+
+static VAD_MONITOR: Lazy<Mutex<Option<VadMonitorHandle>>> = Lazy::new(|| Mutex::new(None));
+
+/// Configuration for streaming transcription during recording.
+pub struct StreamingConfig {
+    pub model_size: String,
+    pub language: Option<String>,
+}
+
+/// Start the VAD-triggered streaming monitor.
+/// Call this after `start_capture()` to enable background transcription during recording.
+pub fn start_streaming(config: StreamingConfig) {
+    // Clear previous streaming state
+    *STREAMING_RESULTS.lock().unwrap() = Vec::new();
+    *STREAMING_CONSUMED.lock().unwrap() = 0;
+
+    // Check if VAD model is available
+    let vad_path = get_vad_model_path();
+    if !vad_path.exists() {
+        log::info!("VAD model not found, streaming transcription disabled");
+        return;
+    }
+
+    // Check if whisper model is available
+    let model_path = get_model_path(&config.model_size);
+    if !model_path.exists() {
+        log::info!("Whisper model not found, streaming transcription disabled");
+        return;
+    }
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::Builder::new()
+        .name("vad-streaming-monitor".to_string())
+        .spawn(move || {
+            vad_monitor_loop(stop_rx, config);
+        })
+        .expect("Failed to spawn VAD monitor thread");
+
+    *VAD_MONITOR.lock().unwrap() = Some(VadMonitorHandle {
+        stop_sender: stop_tx,
+        thread_handle: thread,
+    });
+
+    log::info!("VAD streaming monitor started");
+}
+
+/// Stop the VAD monitor and return (accumulated_results, consumed_sample_count).
+/// After this returns, all streaming transcriptions are complete.
+pub fn stop_streaming() -> (Vec<String>, usize) {
+    let handle = VAD_MONITOR.lock().unwrap().take();
+    if let Some(h) = handle {
+        // Signal stop
+        h.stop_sender.send(()).ok();
+        // Join thread — ensures all in-progress transcriptions complete
+        h.thread_handle.join().ok();
+        log::info!("VAD streaming monitor stopped");
+    }
+
+    let results = std::mem::take(&mut *STREAMING_RESULTS.lock().unwrap());
+    let consumed = *STREAMING_CONSUMED.lock().unwrap();
+    *STREAMING_CONSUMED.lock().unwrap() = 0;
+
+    log::info!(
+        "Streaming results: {} segments, {} samples consumed",
+        results.len(),
+        consumed
+    );
+
+    (results, consumed)
+}
+
+/// Main loop for the VAD streaming monitor thread.
+/// Periodically reads new audio from WHISPER_BUFFER, runs VAD to detect
+/// completed utterances, and transcribes them in-thread.
+fn vad_monitor_loop(stop_rx: std::sync::mpsc::Receiver<()>, config: StreamingConfig) {
+    use crate::audio::capture::snapshot_whisper_buffer;
+
+    let mut abs_position: usize = 0; // Next sample to read from WHISPER_BUFFER
+    let mut pending_audio: Vec<f32> = Vec::with_capacity(16000 * 10); // ~10s capacity
+    let mut pending_start: usize = 0; // Absolute position of pending_audio[0]
+
+    // Minimum silence gap after speech to consider an utterance "complete" (in seconds)
+    const MIN_SILENCE_GAP: f32 = 0.5;
+    // Minimum speech duration to bother transcribing (in samples at 16kHz)
+    const MIN_SPEECH_SAMPLES: usize = 8000; // 0.5s
+    // How often to check for new audio (ms)
+    const CHECK_INTERVAL_MS: u64 = 300;
+    // Minimum audio to accumulate before running VAD (in samples at 16kHz)
+    const MIN_VAD_SAMPLES: usize = 16000; // 1s
+
+    log::info!(
+        "VAD monitor loop started (model={}, gap={:.1}s, interval={}ms)",
+        config.model_size,
+        MIN_SILENCE_GAP,
+        CHECK_INTERVAL_MS
+    );
+
+    loop {
+        // Check for stop signal (non-blocking)
+        if stop_rx.try_recv().is_ok() {
+            log::info!("VAD monitor received stop signal");
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(CHECK_INTERVAL_MS));
+
+        // Get new samples from WHISPER_BUFFER
+        let (new_samples, new_len) = snapshot_whisper_buffer(abs_position);
+        if !new_samples.is_empty() {
+            abs_position = new_len;
+            pending_audio.extend_from_slice(&new_samples);
+        }
+
+        // Need minimum audio to run meaningful VAD
+        if pending_audio.len() < MIN_VAD_SAMPLES {
+            continue;
+        }
+
+        // Run VAD on pending audio to find speech segments
+        let vad_path = get_vad_model_path();
+        if !vad_path.exists() {
+            continue;
+        }
+
+        let vad_start = std::time::Instant::now();
+        let mut vad_guard = match VAD_CACHE.lock() {
+            Ok(guard) => guard,
+            Err(_) => continue,
+        };
+
+        if vad_guard.is_none() {
+            let mut ctx_params = WhisperVadContextParams::new();
+            ctx_params.set_n_threads(2);
+            match WhisperVadContext::new(vad_path.to_str().unwrap(), ctx_params) {
+                Ok(ctx) => {
+                    *vad_guard = Some(SendableVadContext(ctx));
+                }
+                Err(e) => {
+                    log::warn!("Failed to load VAD model for streaming: {}", e);
+                    continue;
+                }
+            }
+        }
+
+        let vad_ctx = &mut vad_guard.as_mut().unwrap().0;
+        let mut vad_params = WhisperVadParams::new();
+        vad_params.set_threshold(0.5);
+        vad_params.set_min_speech_duration(250);
+        vad_params.set_min_silence_duration(100);
+        vad_params.set_speech_pad(30);
+
+        let segments = match vad_ctx.segments_from_samples(vad_params, &pending_audio) {
+            Ok(segs) => segs,
+            Err(e) => {
+                log::warn!("VAD inference failed in streaming: {}", e);
+                continue;
+            }
+        };
+
+        // Collect segment timestamps (start/end in centiseconds)
+        let seg_list: Vec<(f32, f32)> = segments.into_iter().map(|s| (s.start, s.end)).collect();
+
+        // Release VAD lock before potentially long transcription
+        drop(vad_guard);
+
+        let vad_elapsed = vad_start.elapsed();
+
+        if seg_list.is_empty() {
+            continue;
+        }
+
+        // Check if there's a completed utterance: last segment must end with enough
+        // silence gap before the end of pending audio
+        let pending_duration_sec = pending_audio.len() as f32 / 16000.0;
+        let last_seg_end_sec = seg_list.last().unwrap().1 * 0.01; // centiseconds → seconds
+        let gap = pending_duration_sec - last_seg_end_sec;
+
+        if gap < MIN_SILENCE_GAP {
+            // Speech is still ongoing or gap too short — wait for more audio
+            continue;
+        }
+
+        // We have a completed utterance! Extract speech samples.
+        let mut speech_samples: Vec<f32> = Vec::new();
+        for &(start_cs, end_cs) in &seg_list {
+            let start_sample = (start_cs * 160.0) as usize; // 0.01s * 16000 = 160
+            let end_sample = ((end_cs * 160.0) as usize).min(pending_audio.len());
+            if start_sample < end_sample {
+                speech_samples.extend_from_slice(&pending_audio[start_sample..end_sample]);
+            }
+        }
+
+        if speech_samples.len() < MIN_SPEECH_SAMPLES {
+            // Too short to transcribe reliably — wait for more
+            continue;
+        }
+
+        log::info!(
+            "VAD streaming: detected completed utterance ({} segments, {:.2}s speech, {:.2}s gap, VAD took {:.1}ms)",
+            seg_list.len(),
+            speech_samples.len() as f32 / 16000.0,
+            gap,
+            vad_elapsed.as_secs_f64() * 1000.0
+        );
+
+        // Check stop signal BEFORE starting a potentially long transcription (1-30s).
+        // Without this check, stop_streaming() would block until an in-progress
+        // run_whisper() completes, adding seconds of latency to the stop path.
+        if stop_rx.try_recv().is_ok() {
+            log::info!("VAD monitor received stop signal before transcription, aborting to let tail handle it");
+            break;
+        }
+
+        // Transcribe the completed utterance directly (we're already on a background thread).
+        // No need to send to the dedicated transcription thread — that's for the final tail.
+        let transcription_start = std::time::Instant::now();
+        let model_path = get_model_path(&config.model_size);
+        match run_whisper(
+            &model_path,
+            &config.model_size,
+            &speech_samples,
+            config.language.as_deref(),
+        ) {
+            Ok(text) => {
+                if !text.is_empty() {
+                    log::info!(
+                        "VAD streaming: transcribed '{}' in {:.2}s",
+                        if text.len() > 60 { format!("{}...", &text[..60]) } else { text.clone() },
+                        transcription_start.elapsed().as_secs_f64()
+                    );
+                    STREAMING_RESULTS.lock().unwrap().push(text);
+                } else {
+                    log::info!(
+                        "VAD streaming: empty transcription (hallucination suppressed) in {:.2}s",
+                        transcription_start.elapsed().as_secs_f64()
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("VAD streaming: transcription failed: {}", e);
+            }
+        }
+
+        // Advance past the consumed audio. Clear everything up to the end of the
+        // last speech segment + some padding to avoid re-processing.
+        let clear_to_sample = ((seg_list.last().unwrap().1 * 160.0) as usize)
+            .min(pending_audio.len());
+        pending_start += clear_to_sample;
+        pending_audio.drain(..clear_to_sample);
+
+        // Update consumed count so stop_capture knows the tail boundary
+        *STREAMING_CONSUMED.lock().unwrap() = pending_start;
+    }
+
+    log::info!("VAD monitor loop exiting");
+}
+
 /// Preload the Whisper model into MODEL_CACHE so the first transcription is fast.
 ///
 /// This loads the GGML model file from disk, initializes the Metal/CoreML GPU backend,
@@ -657,7 +953,55 @@ pub fn preload_model(model_size: &str) -> Result<(), WhisperError> {
     Ok(())
 }
 
-pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<String, WhisperError> {
+/// A job for the dedicated transcription thread.
+struct TranscriptionJob {
+    samples: Vec<f32>,
+    model_size: String,
+    language: Option<String>,
+    run_vad: bool,
+    result_tx: tokio::sync::oneshot::Sender<Result<String, WhisperError>>,
+}
+
+/// Lazy-initialized sender for the dedicated transcription thread.
+/// The thread is spawned on first use and persists for the app lifetime.
+static TRANSCRIPTION_TX: Lazy<std::sync::mpsc::Sender<TranscriptionJob>> = Lazy::new(|| {
+    let (tx, rx) = std::sync::mpsc::channel::<TranscriptionJob>();
+    std::thread::Builder::new()
+        .name("whisper-transcription".to_string())
+        .spawn(move || {
+            log::info!("Dedicated transcription thread started");
+            for job in rx {
+                let samples = if job.run_vad {
+                    vad_filter_speech(&job.samples)
+                } else {
+                    job.samples
+                };
+
+                let result = if samples.is_empty() {
+                    Ok(String::new())
+                } else {
+                    let path = get_model_path(&job.model_size);
+                    run_whisper(&path, &job.model_size, &samples, job.language.as_deref())
+                };
+
+                // Send result back (ignore error if receiver was dropped)
+                job.result_tx.send(result).ok();
+            }
+            log::info!("Dedicated transcription thread exiting");
+        })
+        .expect("Failed to spawn transcription thread");
+    tx
+});
+
+/// Transcribe audio, optionally combining with pre-transcribed streaming results.
+///
+/// When `streaming_prefix` is provided (from VAD-triggered streaming during recording),
+/// only the tail audio is transcribed and appended to the streaming results.
+pub async fn transcribe(
+    audio: AudioData,
+    settings: &UserSettings,
+    streaming_prefix: Option<String>,
+) -> Result<String, WhisperError> {
     let model_size = settings
         .transcription
         .model_size
@@ -673,20 +1017,42 @@ pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<Str
     // Prepare audio for Whisper (16kHz mono)
     let samples = prepare_for_whisper(audio);
 
-    // Run VAD + transcription in blocking task to not block async runtime.
-    // Both VAD (model load + neural inference) and Whisper are heavy FFI work.
-    let path = model_path.clone();
+    // If no tail audio, return just the streaming prefix
+    if samples.is_empty() {
+        return Ok(streaming_prefix.unwrap_or_default());
+    }
+
+    // Send to dedicated transcription thread (replaces tokio::spawn_blocking).
+    // The persistent thread avoids thread-pool scheduling overhead (~1-5ms)
+    // and keeps a warm execution context.
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let language = settings.transcription.language.clone();
-    let size = model_size.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let samples = vad_filter_speech(&samples);
-        run_whisper(&path, &size, &samples, language.as_deref())
-    })
-    .await
-    .map_err(|e| WhisperError::TranscriptionError(e.to_string()))?;
+    TRANSCRIPTION_TX
+        .send(TranscriptionJob {
+            samples,
+            model_size,
+            language,
+            run_vad: true,
+            result_tx,
+        })
+        .map_err(|_| WhisperError::TranscriptionError("Transcription thread closed".into()))?;
 
-    result
+    let tail_text = result_rx
+        .await
+        .map_err(|_| WhisperError::TranscriptionError("Transcription thread dropped result".into()))??;
+
+    // Combine streaming prefix with tail transcription
+    match streaming_prefix {
+        Some(prefix) if !prefix.is_empty() => {
+            if tail_text.is_empty() {
+                Ok(prefix)
+            } else {
+                Ok(format!("{} {}", prefix, tail_text))
+            }
+        }
+        _ => Ok(tail_text),
+    }
 }
 
 /// Check if a model is a "turbo" variant (pruned to 4 decoder layers).
@@ -695,6 +1061,20 @@ pub async fn transcribe(audio: AudioData, settings: &UserSettings) -> Result<Str
 /// more conservative settings to avoid hallucinations.
 fn is_turbo_model(model_size: &str) -> bool {
     model_size.contains("turbo")
+}
+
+/// Check if a model is a "distil" variant (distilled to 2 decoder layers).
+/// Distil models are even more aggressive than turbo (2 vs 4 decoder layers)
+/// and can safely use all turbo-level optimizations.
+fn is_distil_model(model_size: &str) -> bool {
+    model_size.contains("distil")
+}
+
+/// Check if a model has a lightweight decoder (turbo=4 layers, distil=2 layers).
+/// These models are resilient to aggressive optimizations like reduced audio_ctx
+/// and single_segment mode. Full models (32 decoder layers) need conservative settings.
+fn is_lightweight_decoder(model_size: &str) -> bool {
+    is_turbo_model(model_size) || is_distil_model(model_size)
 }
 
 /// Known whisper hallucination phrases that appear when the model generates
@@ -830,6 +1210,8 @@ fn run_whisper(
 
     // Determine model characteristics for parameter tuning
     let is_turbo = is_turbo_model(model_size);
+    let is_distil = is_distil_model(model_size);
+    let is_lightweight = is_lightweight_decoder(model_size);
     let has_coreml = is_coreml_downloaded(model_size);
     let audio_seconds = samples.len() as f32 / 16000.0;
 
@@ -843,12 +1225,12 @@ fn run_whisper(
     // IMPORTANT: Full large-v3 models (32 decoder layers, including quantized variants like
     // large-v3-q5_0) are very sensitive to reduced audio_ctx. The 32-layer decoder amplifies
     // small encoder artifacts from truncated context into confident hallucinations like
-    // "Thank you". Only turbo models (4 decoder layers) are resilient enough for this
-    // optimization. Always use the full 1500 window for non-turbo models.
-    let audio_ctx = if has_coreml || !is_turbo {
+    // "Thank you". Only lightweight models (turbo=4 layers, distil=2 layers) are resilient
+    // enough for this optimization.
+    let audio_ctx = if has_coreml || !is_lightweight {
         0 // 0 = use default (full 1500 window), safe for CoreML and full-size decoders
     } else {
-        // Turbo + CPU-only: shrink encoder window proportionally for speed
+        // Lightweight decoder + CPU-only: shrink encoder window proportionally for speed
         let ctx = ((audio_seconds / 30.0) * 1500.0).ceil() as i32 + 128;
         let ctx = ((ctx + 255) / 256) * 256; // round up to multiple of 256
         ctx.clamp(768, 1500) // min 768 (quality), max 1500 (whisper limit)
@@ -869,16 +1251,16 @@ fn run_whisper(
     // We only extract text, not timestamps -- saves 5-10%.
     params.set_no_timestamps(true);
 
-    // === Single-segment mode (turbo models only) ===
+    // === Single-segment mode (lightweight decoder models only) ===
     // single_segment skips multi-segment seeking logic for speed.
-    // This is safe for turbo models (4 decoder layers) on short dictation.
+    // Safe for turbo (4 layers) and distil (2 layers) models on short dictation.
     //
     // For full large-v3 models (32 decoder layers), the seeking logic acts as a
     // critical hallucination safeguard: it detects when a segment is likely wrong
     // (via entropy/logprob thresholds) and retries with different parameters.
     // Disabling it removes the only recovery path, causing persistent "Thank you"
     // hallucinations on the full large-v3 and large-v3-q5_0 models.
-    params.set_single_segment(is_turbo);
+    params.set_single_segment(is_lightweight);
 
     // === Anti-hallucination parameters ===
     // suppress_blank: Suppress blank/empty segments at the start of output.
@@ -889,18 +1271,18 @@ fn run_whisper(
     // When the model's no-speech probability exceeds this, the segment text is suppressed.
     // Default is 0.6. For full large-v3 models, use a slightly lower threshold to be
     // more aggressive at filtering hallucinations from silence.
-    params.set_no_speech_thold(if is_turbo { 0.6 } else { 0.5 });
+    params.set_no_speech_thold(if is_lightweight { 0.6 } else { 0.5 });
 
     // entropy_thold: Segments with average token entropy above this are considered
     // low-confidence and trigger temperature fallback or are discarded.
     // Default is 2.4. For full models, use a tighter threshold to catch hallucinations
     // earlier (hallucinated text often has higher entropy than real transcription).
-    params.set_entropy_thold(if is_turbo { 2.4 } else { 2.2 });
+    params.set_entropy_thold(if is_lightweight { 2.4 } else { 2.2 });
 
     // logprob_thold: Segments with average token log probability below this are
     // considered low-confidence. Default is -1.0. For full models, use a slightly
     // higher (less negative) threshold to reject more uncertain outputs.
-    params.set_logprob_thold(if is_turbo { -1.0 } else { -0.8 });
+    params.set_logprob_thold(if is_lightweight { -1.0 } else { -0.8 });
 
     // === Cap decoder output tokens ===
     // Prevents hallucination loops that can add seconds of latency.
@@ -911,15 +1293,15 @@ fn run_whisper(
          temp_inc=0.2, no_timestamps, single_segment={}, suppress_blank=true, \
          no_speech_thold={}, entropy_thold={}, logprob_thold={}, max_tokens=128",
         model_size,
-        if is_turbo { "turbo/4-layer" } else { "full/32-layer" },
+        if is_distil { "distil/2-layer" } else if is_turbo { "turbo/4-layer" } else { "full/32-layer" },
         n_threads,
         audio_ctx,
-        if has_coreml { " (CoreML, full window)" } else if !is_turbo { " (full window, non-turbo)" } else { "" },
+        if has_coreml { " (CoreML, full window)" } else if !is_lightweight { " (full window, full-decoder)" } else { "" },
         audio_seconds,
-        is_turbo,
-        if is_turbo { 0.6 } else { 0.5 },
-        if is_turbo { 2.4 } else { 2.2 },
-        if is_turbo { -1.0 } else { -0.8 },
+        is_lightweight,
+        if is_lightweight { 0.6 } else { 0.5 },
+        if is_lightweight { 2.4 } else { 2.2 },
+        if is_lightweight { -1.0 } else { -0.8 },
     );
 
     // Set language if specified

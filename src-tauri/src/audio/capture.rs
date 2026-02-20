@@ -244,9 +244,14 @@ pub fn start_capture() -> Result<(), AudioError> {
             let cb_channels = ch;
             let cb_sample_rate = sr;
 
+            // Request smaller buffer for lower tail latency (256 frames instead of
+            // default 512). CPAL will use the nearest supported size if 256 isn't exact.
+            let mut stream_config: cpal::StreamConfig = config.into();
+            stream_config.buffer_size = cpal::BufferSize::Fixed(256);
+
             let stream = device
                 .build_input_stream(
-                    &config.into(),
+                    &stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         let count = CALLBACK_COUNT.fetch_add(1, AtomicOrdering::SeqCst);
                         TOTAL_SAMPLES.fetch_add(data.len(), AtomicOrdering::SeqCst);
@@ -482,6 +487,22 @@ pub fn stop_capture() -> Result<AudioData, AudioError> {
         channels,
         whisper_samples,
     })
+}
+
+/// Read a snapshot of WHISPER_BUFFER from position `from` onwards.
+/// Returns (new_samples, current_buffer_length).
+/// Used by the VAD streaming monitor to read new audio without blocking the CPAL callback.
+pub fn snapshot_whisper_buffer(from: usize) -> (Vec<f32>, usize) {
+    if let Ok(wbuf) = WHISPER_BUFFER.lock() {
+        let len = wbuf.len();
+        if len > from {
+            (wbuf[from..].to_vec(), len)
+        } else {
+            (Vec::new(), len)
+        }
+    } else {
+        (Vec::new(), from)
+    }
 }
 
 /// Resample audio to 16kHz mono for Whisper.

@@ -160,6 +160,23 @@ fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
     }
     eprintln!("[recording] Audio capture started successfully");
 
+    // Start VAD-triggered streaming transcription in background.
+    // This transcribes completed utterances during recording so only
+    // the final partial utterance needs processing on stop.
+    {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let model_size = settings
+            .transcription
+            .model_size
+            .clone()
+            .unwrap_or_else(|| "small".to_string());
+        let language = settings.transcription.language.clone();
+        transcription::whisper::start_streaming(transcription::whisper::StreamingConfig {
+            model_size,
+            language,
+        });
+    }
+
     // Start audio level emitter
     let running = state.audio_level_emitter_running.clone();
     running.store(true, Ordering::SeqCst);
@@ -210,9 +227,27 @@ async fn stop_recording(
         return Err("Not recording".to_string());
     }
 
+    // Stop VAD streaming monitor first (ensures all in-progress transcriptions complete
+    // before we stop capture). Returns accumulated results and consumed sample count.
+    eprintln!("[recording] Stopping VAD streaming monitor...");
+    let (streaming_results, consumed_samples) = transcription::whisper::stop_streaming();
+    let streaming_prefix = if streaming_results.is_empty() {
+        eprintln!("[recording] No streaming results (no completed utterances detected)");
+        None
+    } else {
+        let prefix = streaming_results.join(" ");
+        eprintln!(
+            "[recording] Streaming results: {} segments, {} consumed samples, prefix='{}...'",
+            streaming_results.len(),
+            consumed_samples,
+            if prefix.len() > 60 { &prefix[..60] } else { &prefix }
+        );
+        Some(prefix)
+    };
+
     // Stop audio capture and get audio data
     eprintln!("[recording] Stopping audio capture...");
-    let audio_data = audio::capture::stop_capture().map_err(|e| {
+    let mut audio_data = audio::capture::stop_capture().map_err(|e| {
         eprintln!("[recording] ERROR: Failed to stop audio capture: {}", e);
         e.to_string()
     })?;
@@ -222,6 +257,31 @@ async fn stop_recording(
         audio_data.sample_rate,
         audio_data.samples.len() as f32 / audio_data.sample_rate as f32
     );
+
+    // Trim whisper_samples to only the tail (audio not yet transcribed by streaming).
+    // This dramatically reduces inference time on stop — only the final partial utterance
+    // needs processing instead of the entire recording.
+    if consumed_samples > 0 {
+        if let Some(ref mut ws) = audio_data.whisper_samples {
+            if consumed_samples < ws.len() {
+                let tail_len = ws.len() - consumed_samples;
+                eprintln!(
+                    "[recording] Trimming whisper buffer: {} total -> {} tail ({:.2}s)",
+                    ws.len(),
+                    tail_len,
+                    tail_len as f32 / 16000.0
+                );
+                *ws = ws[consumed_samples..].to_vec();
+            } else {
+                eprintln!(
+                    "[recording] All audio consumed by streaming ({} >= {}), no tail",
+                    consumed_samples,
+                    ws.len()
+                );
+                *ws = Vec::new();
+            }
+        }
+    }
 
     // Emit processing event
     app.emit("transcription-processing", ()).ok();
@@ -235,9 +295,9 @@ async fn stop_recording(
     // Calculate duration before moving audio_data into transcribe
     let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
 
-    // Transcribe audio (takes ownership of audio_data to avoid unnecessary clone)
-    eprintln!("[recording] Starting transcription...");
-    let raw_text = transcription::whisper::transcribe(audio_data, &settings)
+    // Transcribe remaining tail audio and combine with streaming prefix
+    eprintln!("[recording] Starting tail transcription...");
+    let raw_text = transcription::whisper::transcribe(audio_data, &settings, streaming_prefix)
         .await
         .map_err(|e| {
             eprintln!("[recording] ERROR: Transcription failed: {}", e);
