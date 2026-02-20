@@ -44,9 +44,11 @@ mod platform {
     #[allow(dead_code)]
     const VK_SPACE: CGKeyCode = 0x31;
 
-    // Maximum characters per CGEvent Unicode string (macOS limitation)
-    // CGEventKeyboardSetUnicodeString truncates at 20 characters
-    const MAX_UNICODE_CHARS_PER_EVENT: usize = 20;
+    // Maximum UTF-16 units per CGEvent Unicode string (macOS limitation)
+    // CGEventKeyboardSetUnicodeString truncates at 20 UTF-16 code units.
+    // BMP characters (most CJK, Latin, etc.) are 1 unit each.
+    // Supplementary characters (emoji, rare CJK) are 2 units (surrogate pair).
+    const MAX_UTF16_UNITS_PER_EVENT: usize = 20;
 
     // Delay between key events in microseconds
     // 2ms provides good balance between speed and reliability across different apps
@@ -95,7 +97,7 @@ mod platform {
 
     /// Type text using native macOS CGEvent with proper Unicode support
     pub fn type_text(text: &str) -> Result<(), super::InjectionError> {
-        eprintln!("[type_text] Starting native macOS typing for {} chars", text.len());
+        eprintln!("[type_text] Starting native macOS typing for {} chars ({} bytes)", text.chars().count(), text.len());
 
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| super::InjectionError::Failed("CGEventSource creation failed".into()))?;
@@ -120,21 +122,28 @@ mod platform {
                     i += 1;
                 }
                 _ => {
-                    // Collect a chunk of regular characters (up to MAX_UNICODE_CHARS_PER_EVENT)
-                    // Stop at special characters that need individual handling
+                    // Collect a chunk of regular characters (up to MAX_UTF16_UNITS_PER_EVENT)
+                    // Track UTF-16 unit count since that's what CGEventKeyboardSetUnicodeString uses.
+                    // Stop at special characters that need individual handling.
                     let mut chunk = String::new();
-                    while i < chars.len() && chunk.chars().count() < MAX_UNICODE_CHARS_PER_EVENT {
+                    let mut utf16_count: usize = 0;
+                    while i < chars.len() {
                         let ch = chars[i];
                         if ch == '\n' || ch == '\r' || ch == '\t' {
                             break;
                         }
+                        let ch_utf16_len = ch.len_utf16();
+                        if utf16_count + ch_utf16_len > MAX_UTF16_UNITS_PER_EVENT {
+                            break;
+                        }
                         chunk.push(ch);
+                        utf16_count += ch_utf16_len;
                         i += 1;
                     }
 
                     if !chunk.is_empty() {
                         eprintln!("[type_text] Typing chunk: '{}' ({} chars)",
-                            if chunk.len() > 30 { &chunk[..30] } else { &chunk },
+                            super::truncate_for_display(&chunk, 30),
                             chunk.chars().count());
                         type_unicode_chunk(&source, &chunk)?;
                     }
@@ -143,7 +152,7 @@ mod platform {
             // Note: delays are handled within type_key and type_unicode_chunk
         }
 
-        eprintln!("[type_text] Completed typing {} chars", text.len());
+        eprintln!("[type_text] Completed typing {} chars", text.chars().count());
         Ok(())
     }
 
@@ -177,7 +186,7 @@ mod platform {
         }
 
         eprintln!("[type_unicode_chunk] Sending {} UTF-16 units for '{}...'",
-            utf16.len(), if chunk.len() > 10 { &chunk[..10] } else { chunk });
+            utf16.len(), super::truncate_for_display(chunk, 10));
 
         // Create a keyboard event with keycode 0 (we'll set the Unicode string)
         // Using keycode 0 with Unicode string is the standard approach for text input
@@ -329,6 +338,19 @@ mod platform {
 // Main API
 // ============================================================================
 
+/// Truncate a string at a char boundary (safe for multi-byte UTF-8)
+fn truncate_for_display(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the largest char boundary <= max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Inject text into the currently focused application
 pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionError> {
     let method = settings
@@ -337,7 +359,7 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .as_deref()
         .unwrap_or("paste");
 
-    eprintln!("[inject] method={}, len={}", method, text.len());
+    eprintln!("[inject] method={}, chars={}, bytes={}", method, text.chars().count(), text.len());
 
     // Strip [BLANK_AUDIO] markers that Whisper outputs when no speech detected
     let text = text
@@ -352,7 +374,7 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
     }
 
     eprintln!("[inject] Text after cleanup: '{}' ({} chars)",
-        if text.len() > 50 { &text[..50] } else { text }, text.len());
+        truncate_for_display(text, 50), text.chars().count());
 
     // Check accessibility permissions
     if !platform::check_accessibility() {
