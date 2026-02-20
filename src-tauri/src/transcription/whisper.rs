@@ -1313,6 +1313,15 @@ fn run_whisper(
         if is_lightweight { -1.0 } else { -0.8 },
     );
 
+    // === Dictionary vocabulary prompt ===
+    // Feed custom word entries to the decoder as initial context, biasing it toward
+    // recognizing specific names, terms, and uncommon words the user has added.
+    let vocab_prompt = crate::dictionary::get_vocabulary_prompt();
+    if let Some(ref prompt) = vocab_prompt {
+        params.set_initial_prompt(prompt);
+        log::info!("Whisper initial_prompt set with {} vocabulary words", prompt.split(", ").count());
+    }
+
     // Set language if specified
     if let Some(lang) = language {
         if lang != "auto" {
