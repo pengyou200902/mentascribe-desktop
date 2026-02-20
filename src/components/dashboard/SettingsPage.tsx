@@ -1215,7 +1215,7 @@ export function SettingsPage() {
                               Distilled
                             </span>
                           )}
-                          {model.id.includes('q5') && (
+                          {(model.id.includes('q5') || model.id.includes('q8')) && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 ml-2">
                               Quantized
                             </span>
