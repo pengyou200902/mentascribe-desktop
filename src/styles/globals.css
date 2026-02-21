@@ -52,14 +52,6 @@ html, body, #root {
   margin: 0;
 }
 
-/* ---- Hover Zone (proximity detection above pill) ---- */
-.wispr-hover-zone {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding-top: 14px;
-}
-
 /* ---- Pill Base ---- */
 .wispr-pill {
   display: flex;
@@ -72,11 +64,10 @@ html, body, #root {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ---- Collapsed State (default idle) ---- */
+/* ---- Collapsed State: plain solid pill, no inner content ---- */
 .wispr-pill.collapsed {
   height: 10px;
   min-width: 52px;
-  padding: 0 10px;
   background: rgba(28, 28, 28, 0.80);
   border-radius: 5px;
 }
@@ -88,10 +79,6 @@ html, body, #root {
   padding: 0 16px;
   background: rgba(20, 20, 20, 0.95);
   border-radius: 20px;
-}
-
-.wispr-pill.expanded:hover {
-  background: rgba(30, 30, 30, 0.95);
 }
 
 .wispr-pill.expanded.active {
@@ -108,14 +95,6 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   height: 100%;
-}
-
-/* ---- Collapsed Dash (ultra-slim indicator) ---- */
-.wispr-collapsed-dash {
-  width: 20px;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.35);
-  border-radius: 1px;
 }
 
 /* ---- Expanded Idle: Dash + Tooltip Label ---- */

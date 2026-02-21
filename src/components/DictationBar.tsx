@@ -1,5 +1,4 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 
 interface DictationBarProps {
@@ -59,47 +58,17 @@ export const DictationBar: FC<DictationBarProps> = ({
     audioLevelRef.current = audioLevel;
   }, [audioLevel]);
 
-  // Setup window-level mouse tracking for transparent windows
+  // Cursor proximity detection via Rust — works regardless of window focus.
+  // Uses [NSEvent mouseLocation] which is always available, unlike JS mouse
+  // events which only fire when the NSPanel has focus.
   useEffect(() => {
-    const window = getCurrentWindow();
-
-    const unlistenFocus = window.onFocusChanged(({ payload: focused }) => {
-      if (!focused) {
-        setTimeout(() => setIsHovered(false), 100);
-      }
-    });
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!widgetRef.current) return;
-      const rect = widgetRef.current.getBoundingClientRect();
-      const padding = 8;
-      const isInside =
-        e.clientX >= rect.left - padding &&
-        e.clientX <= rect.right + padding &&
-        e.clientY >= rect.top - padding &&
-        e.clientY <= rect.bottom + padding;
-      setIsHovered(isInside);
-    };
-
-    const handleMouseLeave = () => setIsHovered(false);
-    const handleWindowMouseEnter = () => setIsHovered(true);
-
-    document.addEventListener('mousemove', handleMouseMove, { passive: true });
-    document.addEventListener('mouseleave', handleMouseLeave);
-
-    const rootEl = document.getElementById('root');
-    if (rootEl) {
-      rootEl.addEventListener('mouseenter', handleWindowMouseEnter);
-    }
-
-    return () => {
-      unlistenFocus.then(fn => fn());
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseleave', handleMouseLeave);
-      if (rootEl) {
-        rootEl.removeEventListener('mouseenter', handleWindowMouseEnter);
-      }
-    };
+    const interval = setInterval(async () => {
+      try {
+        const over = await invoke<boolean>('is_cursor_over_pill');
+        setIsHovered(over);
+      } catch {}
+    }, 100);
+    return () => clearInterval(interval);
   }, []);
 
   // Animate waveform only when recording
@@ -155,10 +124,7 @@ export const DictationBar: FC<DictationBarProps> = ({
     };
   }, [isRecording]);
 
-  const handlePointerEnter = useCallback(() => setIsHovered(true), []);
-  const handlePointerLeave = useCallback(() => setIsHovered(false), []);
-
-  // Dynamically resize the Tauri window to match the hover zone dimensions.
+  // Dynamically resize the Tauri window to match the pill dimensions.
   // Uses resize_pill Rust command which atomically sets size + position via
   // setFrame:display:, keeping the bottom edge fixed so the pill grows upward.
   useEffect(() => {
@@ -251,29 +217,19 @@ export const DictationBar: FC<DictationBarProps> = ({
   return (
     <div
       ref={widgetRef}
-      className="wispr-hover-zone"
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-      onMouseEnter={handlePointerEnter}
-      onMouseLeave={handlePointerLeave}
+      className={`wispr-pill ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
+      style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
+      onMouseDown={handleMouseDown}
     >
-      <div
-        className={`wispr-pill ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
-        style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
-        onMouseDown={handleMouseDown}
-      >
+      {isExpanded && (
         <div className="wispr-content">
-          {isExpanded ? (
-            error ? renderError() :
-            isProcessing ? renderProcessing() :
-            isRecording ? renderRecording() :
-            isPreloading ? renderInitializing() :
-            renderExpandedIdle()
-          ) : (
-            <div className="wispr-collapsed-dash" />
-          )}
+          {error ? renderError() :
+           isProcessing ? renderProcessing() :
+           isRecording ? renderRecording() :
+           isPreloading ? renderInitializing() :
+           renderExpandedIdle()}
         </div>
-      </div>
+      )}
     </div>
   );
 };

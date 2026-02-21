@@ -852,8 +852,8 @@ fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json).
 /// These are initial/fallback values; the frontend dynamically resizes the window to match
 /// the pill widget, so native positioning uses the actual window frame size instead.
-const DICTATION_WINDOW_WIDTH: f64 = 80.0;
-const DICTATION_WINDOW_HEIGHT: f64 = 28.0;
+const DICTATION_WINDOW_WIDTH: f64 = 52.0;
+const DICTATION_WINDOW_HEIGHT: f64 = 10.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
 const DOCK_OFFSET: f64 = 20.0;
 
@@ -1012,6 +1012,49 @@ fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), Str
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Check if the cursor is within proximity of the pill window.
+///
+/// Uses [NSEvent mouseLocation] which reports the global cursor position regardless
+/// of which app has focus. This solves the hover-detection problem where the NSPanel
+/// (with NSNonactivatingPanelMask) doesn't forward mouse events to the webview when
+/// another application is focused.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn is_cursor_over_pill(app: tauri::AppHandle) -> Result<bool, String> {
+    use cocoa::foundation::NSPoint;
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::ManagerExt;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect { origin: NSPoint, size: NSPoint }
+
+    let panel = app.get_webview_panel("dictation")
+        .map_err(|e| format!("{:?}", e))?;
+
+    unsafe {
+        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let frame: NSRect = msg_send![&*panel, frame];
+
+        // Proximity padding — cursor doesn't need to be exactly on the pill
+        let padding = 20.0;
+        let inside =
+            mouse.x >= frame.origin.x - padding &&
+            mouse.x <= frame.origin.x + frame.size.x + padding &&
+            mouse.y >= frame.origin.y - padding &&
+            mouse.y <= frame.origin.y + frame.size.y + padding;
+
+        Ok(inside)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn is_cursor_over_pill(_app: tauri::AppHandle) -> Result<bool, String> {
+    // Non-macOS: fall back to always false (JS events handle hover)
+    Ok(false)
 }
 
 /// Open the dashboard window, optionally navigating to a specific page.
@@ -1364,6 +1407,7 @@ pub fn run() {
             reposition_to_mouse_monitor,
             start_native_drag,
             resize_pill,
+            is_cursor_over_pill,
             // Debug
             frontend_log,
         ])
