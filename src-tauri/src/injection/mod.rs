@@ -107,7 +107,9 @@ mod platform {
             }
             let element = focused_raw as AXUIElementRef;
 
-            // Check the element's role — only text roles support kAXSelectedTextAttribute
+            // Log the element's role for debugging (but don't use it as a gate —
+            // just check settability directly, since some valid targets have
+            // unexpected roles)
             let mut role_raw: CFTypeRef = std::ptr::null();
             let role_attr = CFString::new("AXRole");
             let role_result = AXUIElementCopyAttributeValue(
@@ -115,34 +117,18 @@ mod platform {
                 role_attr.as_concrete_TypeRef(),
                 &mut role_raw,
             );
-
-            let role_ok = if role_result == 0 && !role_raw.is_null() {
+            if role_result == 0 && !role_raw.is_null() {
                 let role_cf = core_foundation::string::CFString::wrap_under_get_rule(
                     role_raw as core_foundation::string::CFStringRef,
                 );
-                let role_str = role_cf.to_string();
-                let text_roles = [
-                    "AXTextField",
-                    "AXTextArea",
-                    "AXComboBox",
-                    "AXWebArea",
-                    "AXSearchField",
-                ];
-                let ok = text_roles.iter().any(|&r| role_str == r);
-                eprintln!("[ax_insert] Role='{}', is_text_role={}", role_str, ok);
-                ok
+                eprintln!("[ax_insert] Focused element role='{}'", role_cf.to_string());
             } else {
                 eprintln!("[ax_insert] Could not get role (error={})", role_result);
-                false
-            };
-
-            if !role_ok {
-                core_foundation::base::CFRelease(element as CFTypeRef);
-                core_foundation::base::CFRelease(system_wide as CFTypeRef);
-                return Ok(false);
             }
 
-            // Check if kAXSelectedTextAttribute is settable
+            // Check if kAXSelectedTextAttribute is settable — this is the real
+            // gate. Skip the role whitelist since some valid targets (e.g.
+            // custom views) have non-standard roles.
             let selected_text_attr = CFString::new("AXSelectedText");
             let mut settable: bool = false;
             let settable_result = AXUIElementIsAttributeSettable(
@@ -298,9 +284,6 @@ mod platform {
         unsafe {
             let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
 
-            // Save change count to detect if user copies during our paste
-            let change_count_before: i64 = msg_send![pasteboard, changeCount];
-
             // Save all pasteboard items with all their type representations
             let items: id = msg_send![pasteboard, pasteboardItems];
             let item_count: usize = msg_send![items, count];
@@ -358,19 +341,22 @@ mod platform {
 
             let _: () = msg_send![ns_text, release];
 
+            // Snapshot change count AFTER our writes — this is the reliable
+            // baseline to detect if anything else touches the pasteboard
+            let change_count_ours: i64 = msg_send![pasteboard, changeCount];
+
             // Simulate Cmd+V
             simulate_paste()?;
 
             // Wait for target app to read the clipboard
             thread::sleep(Duration::from_millis(150));
 
-            // Check if user copied something new during our paste
+            // Check if user or another app copied something during our paste
             let change_count_after: i64 = msg_send![pasteboard, changeCount];
-            // We changed it twice (clearContents + setString), so expect +2
-            if change_count_after != change_count_before + 2 {
+            if change_count_after != change_count_ours {
                 eprintln!(
-                    "[clipboard_restore] Change count mismatch (before={}, after={}), user may have copied — skipping restore",
-                    change_count_before, change_count_after
+                    "[clipboard_restore] Change count changed during paste (ours={}, now={}), user may have copied — skipping restore",
+                    change_count_ours, change_count_after
                 );
                 // Release saved data
                 for item_data in &saved_items {
@@ -812,7 +798,7 @@ fn inject_via_ax_api(text: &str) -> Result<(), InjectionError> {
             }
             Ok(false) => {
                 return Err(InjectionError::Failed(
-                    "AX API not supported for the focused element (not a text field, or app doesn't support it)".into(),
+                    "AX API: focused element does not support kAXSelectedTextAttribute (app may use custom text rendering — try Auto or Keyboard Sim instead)".into(),
                 ));
             }
             Err(e) => return Err(e),
