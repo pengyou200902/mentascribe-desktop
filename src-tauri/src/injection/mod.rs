@@ -274,6 +274,55 @@ mod platform {
         Ok(())
     }
 
+    // ── App detection ────────────────────────────────────────────────────
+
+    /// Get the bundle identifier of the frontmost application.
+    /// Used to detect apps where CGEvent typing doesn't work (terminals, etc.)
+    pub fn frontmost_bundle_id() -> Option<String> {
+        use cocoa::base::id;
+        use objc::{class, msg_send, sel, sel_impl};
+
+        unsafe {
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let app: id = msg_send![workspace, frontmostApplication];
+            if app.is_null() {
+                return None;
+            }
+            let bundle_id: id = msg_send![app, bundleIdentifier];
+            if bundle_id.is_null() {
+                return None;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![bundle_id, UTF8String];
+            if utf8.is_null() {
+                return None;
+            }
+            Some(
+                std::ffi::CStr::from_ptr(utf8)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
+    }
+
+    /// Returns true if the given bundle ID is a terminal emulator.
+    /// Terminal apps process keyboard input through a PTY, not the Cocoa text
+    /// input system, so CGEvent Unicode typing doesn't work — the events
+    /// leak through and cause side effects (e.g. Dock showing up).
+    pub fn is_terminal_app(bundle_id: &str) -> bool {
+        matches!(
+            bundle_id,
+            "com.apple.Terminal"
+                | "com.googlecode.iterm2"
+                | "io.alacritty"
+                | "com.github.wez.wezterm"
+                | "net.kovidgoyal.kitty"
+                | "co.zeit.hyper"
+                | "dev.warp.Warp-Stable"
+                | "com.qvacua.VimR"
+                | "org.alacritty"
+        )
+    }
+
     // ── Tier 3: Clipboard save/paste/restore ───────────────────────────────
 
     /// Save all NSPasteboard items, set text with transient marker, paste, restore.
@@ -717,8 +766,21 @@ fn inject_auto(text: &str) -> Result<(), InjectionError> {
 }
 
 /// macOS auto mode: AX API → CGEvent typing → clipboard save/paste/restore
+///
+/// Terminal emulators (Terminal.app, iTerm2, Alacritty, etc.) skip CGEvent
+/// because they process keyboard input through a PTY, not the Cocoa text
+/// input system. CGEvent Unicode events go unprocessed and leak to the
+/// system (causing side effects like the Dock appearing).
 #[cfg(target_os = "macos")]
 fn inject_auto_macos(text: &str) -> Result<(), InjectionError> {
+    // Detect frontmost app to decide which tiers to try
+    let bundle_id = platform::frontmost_bundle_id().unwrap_or_default();
+    let is_terminal = platform::is_terminal_app(&bundle_id);
+    eprintln!(
+        "[inject_auto] Frontmost app: '{}', is_terminal={}",
+        bundle_id, is_terminal
+    );
+
     // Tier 1: Try AX API first (instant, no clipboard, proper undo)
     match platform::try_ax_insert(text) {
         Ok(true) => {
@@ -726,26 +788,34 @@ fn inject_auto_macos(text: &str) -> Result<(), InjectionError> {
             return Ok(());
         }
         Ok(false) => {
-            eprintln!("[inject_auto] AX API not available for this element, trying CGEvent");
+            eprintln!("[inject_auto] AX API not available for this element");
         }
         Err(e) => {
-            eprintln!("[inject_auto] AX API error: {}, trying CGEvent", e);
+            eprintln!("[inject_auto] AX API error: {}", e);
         }
     }
 
-    // Tier 2: CGEvent typing (works in ~95% of apps)
-    match platform::type_text(text) {
-        Ok(()) => {
-            log::info!("Text injected via CGEvent typing: {} chars", text.len());
-            return Ok(());
+    // Tier 2: CGEvent typing — skip for terminal apps (PTY input ignores these
+    // events and they leak to the system, causing the Dock to appear etc.)
+    if !is_terminal {
+        match platform::type_text(text) {
+            Ok(()) => {
+                log::info!("Text injected via CGEvent typing: {} chars", text.len());
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("[inject_auto] CGEvent typing failed: {}", e);
+            }
         }
-        Err(e) => {
-            eprintln!("[inject_auto] CGEvent typing failed: {}, trying clipboard", e);
-        }
+    } else {
+        eprintln!(
+            "[inject_auto] Skipping CGEvent for terminal app '{}'",
+            bundle_id
+        );
     }
 
-    // Tier 3: Clipboard save/paste/restore (last resort)
-    eprintln!("[inject_auto] Falling back to clipboard save/paste/restore");
+    // Tier 3: Clipboard save/paste/restore (last resort, or primary for terminals)
+    eprintln!("[inject_auto] Using clipboard save/paste/restore");
     platform::clipboard_save_paste_restore(text)?;
     log::info!(
         "Text injected via clipboard save/paste/restore: {} chars",
