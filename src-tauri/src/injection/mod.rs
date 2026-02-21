@@ -12,7 +12,7 @@ pub enum InjectionError {
 }
 
 // ============================================================================
-// macOS Implementation (CGEventPost via CoreGraphics)
+// macOS Implementation
 // ============================================================================
 #[cfg(target_os = "macos")]
 mod platform {
@@ -22,10 +22,8 @@ mod platform {
     use std::thread;
     use std::time::Duration;
 
-    // CoreGraphics type for CGEventRef
     type CGEventRef = *mut std::ffi::c_void;
 
-    // Link to CoreGraphics framework for additional functions
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventKeyboardSetUnicodeString(
@@ -36,26 +34,15 @@ mod platform {
     }
 
     const VK_COMMAND: CGKeyCode = 0x37;
-    #[allow(dead_code)]
-    const VK_SHIFT: CGKeyCode = 0x38;
     const VK_ANSI_V: CGKeyCode = 0x09;
     const VK_RETURN: CGKeyCode = 0x24;
     const VK_TAB: CGKeyCode = 0x30;
-    #[allow(dead_code)]
-    const VK_SPACE: CGKeyCode = 0x31;
 
-    // Maximum UTF-16 units per CGEvent Unicode string (macOS limitation)
-    // CGEventKeyboardSetUnicodeString truncates at 20 UTF-16 code units.
-    // BMP characters (most CJK, Latin, etc.) are 1 unit each.
-    // Supplementary characters (emoji, rare CJK) are 2 units (surrogate pair).
+    // macOS hard limit: CGEventKeyboardSetUnicodeString truncates at 20 UTF-16 code units
     const MAX_UTF16_UNITS_PER_EVENT: usize = 20;
 
-    // Delay between key events in microseconds
-    // 2ms provides good balance between speed and reliability across different apps
-    const KEY_DELAY_US: u64 = 2000;
-
-    // Delay between chunks of text (slightly longer for app processing)
-    const CHUNK_DELAY_US: u64 = 5000; // 5ms between chunks
+    // Optimized delay: 1.5ms between chunks (was 5ms + 2ms = 7ms)
+    const CHUNK_DELAY_US: u64 = 1500;
 
     pub fn check_accessibility() -> bool {
         #[link(name = "ApplicationServices", kind = "framework")]
@@ -69,25 +56,21 @@ mod platform {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| super::InjectionError::Failed("CGEventSource creation failed".into()))?;
 
-        // Cmd down
         let cmd_down = CGEvent::new_keyboard_event(source.clone(), VK_COMMAND, true)
             .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
         cmd_down.set_flags(CGEventFlags::CGEventFlagCommand);
         cmd_down.post(CGEventTapLocation::HID);
 
-        // V down with Cmd modifier
         let v_down = CGEvent::new_keyboard_event(source.clone(), VK_ANSI_V, true)
             .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
         v_down.set_flags(CGEventFlags::CGEventFlagCommand);
         v_down.post(CGEventTapLocation::HID);
 
-        // V up
         let v_up = CGEvent::new_keyboard_event(source.clone(), VK_ANSI_V, false)
             .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
         v_up.set_flags(CGEventFlags::CGEventFlagCommand);
         v_up.post(CGEventTapLocation::HID);
 
-        // Cmd up
         let cmd_up = CGEvent::new_keyboard_event(source, VK_COMMAND, false)
             .map_err(|_| super::InjectionError::Failed("CGEvent creation failed".into()))?;
         cmd_up.post(CGEventTapLocation::HID);
@@ -95,36 +78,136 @@ mod platform {
         Ok(())
     }
 
-    /// Type text using native macOS CGEvent with proper Unicode support
+    // ── Tier 1: Accessibility API ──────────────────────────────────────────
+
+    /// Try to insert text via the macOS Accessibility API (kAXSelectedTextAttribute).
+    /// Returns Ok(true) if text was inserted, Ok(false) if AX is not supported
+    /// for the focused element, or Err on unexpected failure.
+    pub fn try_ax_insert(text: &str) -> Result<bool, super::InjectionError> {
+        use accessibility_sys::*;
+        use core_foundation::base::{CFTypeRef, TCFType};
+        use core_foundation::string::CFString;
+
+        unsafe {
+            let system_wide = AXUIElementCreateSystemWide();
+
+            // Get the focused UI element
+            let mut focused_raw: CFTypeRef = std::ptr::null();
+            let focused_attr = CFString::new("AXFocusedUIElement");
+            let result = AXUIElementCopyAttributeValue(
+                system_wide,
+                focused_attr.as_concrete_TypeRef(),
+                &mut focused_raw,
+            );
+            if result != 0 || focused_raw.is_null() {
+                eprintln!("[ax_insert] No focused element (error={})", result);
+                core_foundation::base::CFRelease(system_wide as CFTypeRef);
+                return Ok(false);
+            }
+            let element = focused_raw as AXUIElementRef;
+
+            // Check the element's role — only text roles support kAXSelectedTextAttribute
+            let mut role_raw: CFTypeRef = std::ptr::null();
+            let role_attr = CFString::new("AXRole");
+            let role_result = AXUIElementCopyAttributeValue(
+                element,
+                role_attr.as_concrete_TypeRef(),
+                &mut role_raw,
+            );
+
+            let role_ok = if role_result == 0 && !role_raw.is_null() {
+                let role_cf = core_foundation::string::CFString::wrap_under_get_rule(
+                    role_raw as core_foundation::string::CFStringRef,
+                );
+                let role_str = role_cf.to_string();
+                let text_roles = [
+                    "AXTextField",
+                    "AXTextArea",
+                    "AXComboBox",
+                    "AXWebArea",
+                    "AXSearchField",
+                ];
+                let ok = text_roles.iter().any(|&r| role_str == r);
+                eprintln!("[ax_insert] Role='{}', is_text_role={}", role_str, ok);
+                ok
+            } else {
+                eprintln!("[ax_insert] Could not get role (error={})", role_result);
+                false
+            };
+
+            if !role_ok {
+                core_foundation::base::CFRelease(element as CFTypeRef);
+                core_foundation::base::CFRelease(system_wide as CFTypeRef);
+                return Ok(false);
+            }
+
+            // Check if kAXSelectedTextAttribute is settable
+            let selected_text_attr = CFString::new("AXSelectedText");
+            let mut settable: bool = false;
+            let settable_result = AXUIElementIsAttributeSettable(
+                element,
+                selected_text_attr.as_concrete_TypeRef(),
+                &mut settable as *mut bool,
+            );
+            if settable_result != 0 || !settable {
+                eprintln!(
+                    "[ax_insert] AXSelectedText not settable (error={}, settable={})",
+                    settable_result, settable
+                );
+                core_foundation::base::CFRelease(element as CFTypeRef);
+                core_foundation::base::CFRelease(system_wide as CFTypeRef);
+                return Ok(false);
+            }
+
+            // Set the selected text — this inserts at cursor or replaces selection
+            let cf_text = CFString::new(text);
+            let set_result = AXUIElementSetAttributeValue(
+                element,
+                selected_text_attr.as_concrete_TypeRef(),
+                cf_text.as_CFTypeRef(),
+            );
+
+            core_foundation::base::CFRelease(element as CFTypeRef);
+            core_foundation::base::CFRelease(system_wide as CFTypeRef);
+
+            if set_result == 0 {
+                eprintln!("[ax_insert] Success via AX API");
+                Ok(true)
+            } else {
+                eprintln!("[ax_insert] SetAttributeValue failed (error={})", set_result);
+                Ok(false)
+            }
+        }
+    }
+
+    // ── Tier 2: Optimized CGEvent typing ───────────────────────────────────
+
+    /// Type text using optimized CGEvent Unicode chunks.
+    /// Key optimization: no Unicode string on key-up, reduced inter-chunk delay.
     pub fn type_text(text: &str) -> Result<(), super::InjectionError> {
-        eprintln!("[type_text] Starting native macOS typing for {} chars ({} bytes)", text.chars().count(), text.len());
+        eprintln!(
+            "[type_text] Starting optimized CGEvent typing for {} chars",
+            text.chars().count()
+        );
 
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| super::InjectionError::Failed("CGEventSource creation failed".into()))?;
 
-        // Process text character by character, handling special characters
         let chars: Vec<char> = text.chars().collect();
         let mut i = 0;
 
         while i < chars.len() {
             let c = chars[i];
-
-            // Handle special control characters with dedicated key events
             match c {
                 '\n' | '\r' => {
-                    eprintln!("[type_text] Typing newline");
                     type_key(&source, VK_RETURN, CGEventFlags::empty())?;
                     i += 1;
                 }
                 '\t' => {
-                    eprintln!("[type_text] Typing tab");
                     type_key(&source, VK_TAB, CGEventFlags::empty())?;
                     i += 1;
                 }
                 _ => {
-                    // Collect a chunk of regular characters (up to MAX_UTF16_UNITS_PER_EVENT)
-                    // Track UTF-16 unit count since that's what CGEventKeyboardSetUnicodeString uses.
-                    // Stop at special characters that need individual handling.
                     let mut chunk = String::new();
                     let mut utf16_count: usize = 0;
                     while i < chars.len() {
@@ -142,59 +225,49 @@ mod platform {
                     }
 
                     if !chunk.is_empty() {
-                        eprintln!("[type_text] Typing chunk: '{}' ({} chars)",
-                            super::truncate_for_display(&chunk, 30),
-                            chunk.chars().count());
                         type_unicode_chunk(&source, &chunk)?;
                     }
                 }
             }
-            // Note: delays are handled within type_key and type_unicode_chunk
         }
 
         eprintln!("[type_text] Completed typing {} chars", text.chars().count());
         Ok(())
     }
 
-    /// Type a single key with optional modifiers
-    fn type_key(source: &CGEventSource, keycode: CGKeyCode, flags: CGEventFlags) -> Result<(), super::InjectionError> {
-        // Key down
+    fn type_key(
+        source: &CGEventSource,
+        keycode: CGKeyCode,
+        flags: CGEventFlags,
+    ) -> Result<(), super::InjectionError> {
         let key_down = CGEvent::new_keyboard_event(source.clone(), keycode, true)
-            .map_err(|_| super::InjectionError::Failed(format!("CGEvent key down failed for keycode {}", keycode)))?;
+            .map_err(|_| super::InjectionError::Failed("CGEvent key down failed".into()))?;
         if !flags.is_empty() {
             key_down.set_flags(flags);
         }
         key_down.post(CGEventTapLocation::HID);
 
-        thread::sleep(Duration::from_micros(KEY_DELAY_US));
-
-        // Key up
         let key_up = CGEvent::new_keyboard_event(source.clone(), keycode, false)
-            .map_err(|_| super::InjectionError::Failed(format!("CGEvent key up failed for keycode {}", keycode)))?;
+            .map_err(|_| super::InjectionError::Failed("CGEvent key up failed".into()))?;
         key_up.post(CGEventTapLocation::HID);
 
+        // Brief delay for control characters
+        thread::sleep(Duration::from_micros(CHUNK_DELAY_US));
         Ok(())
     }
 
-    /// Type a chunk of Unicode text using CGEventKeyboardSetUnicodeString
+    /// Optimized Unicode chunk typing:
+    /// - Unicode string only on key-down (key-up needs none)
+    /// - Reduced inter-chunk delay from 7ms to 1.5ms
     fn type_unicode_chunk(source: &CGEventSource, chunk: &str) -> Result<(), super::InjectionError> {
-        // Convert to UTF-16 for macOS
         let utf16: Vec<u16> = chunk.encode_utf16().collect();
-
         if utf16.is_empty() {
             return Ok(());
         }
 
-        eprintln!("[type_unicode_chunk] Sending {} UTF-16 units for '{}...'",
-            utf16.len(), super::truncate_for_display(chunk, 10));
-
-        // Create a keyboard event with keycode 0 (we'll set the Unicode string)
-        // Using keycode 0 with Unicode string is the standard approach for text input
+        // Key down with Unicode string — this is where text actually gets inserted
         let event_down = CGEvent::new_keyboard_event(source.clone(), 0, true)
-            .map_err(|_| super::InjectionError::Failed("CGEvent creation for Unicode failed".into()))?;
-
-        // Set the Unicode string on the event
-        // This is the key to making Unicode text input work on macOS
+            .map_err(|_| super::InjectionError::Failed("CGEvent Unicode failed".into()))?;
         unsafe {
             CGEventKeyboardSetUnicodeString(
                 event_down.as_ptr() as CGEventRef,
@@ -202,55 +275,161 @@ mod platform {
                 utf16.as_ptr(),
             );
         }
-
-        // Post to HID for broader compatibility (works with most applications)
         event_down.post(CGEventTapLocation::HID);
 
-        thread::sleep(Duration::from_micros(KEY_DELAY_US));
-
-        // Key up event (also with Unicode string for consistency)
+        // Key up — no Unicode string needed (optimization from research)
         let event_up = CGEvent::new_keyboard_event(source.clone(), 0, false)
-            .map_err(|_| super::InjectionError::Failed("CGEvent key up for Unicode failed".into()))?;
-
-        // Set same Unicode string on key-up for completeness
-        unsafe {
-            CGEventKeyboardSetUnicodeString(
-                event_up.as_ptr() as CGEventRef,
-                utf16.len() as u64,
-                utf16.as_ptr(),
-            );
-        }
-
+            .map_err(|_| super::InjectionError::Failed("CGEvent key up failed".into()))?;
         event_up.post(CGEventTapLocation::HID);
 
-        // Allow time for the application to process the chunk
+        // 1.5ms inter-chunk delay (was 7ms total)
         thread::sleep(Duration::from_micros(CHUNK_DELAY_US));
+        Ok(())
+    }
+
+    // ── Tier 3: Clipboard save/paste/restore ───────────────────────────────
+
+    /// Save all NSPasteboard items, set text with transient marker, paste, restore.
+    pub fn clipboard_save_paste_restore(text: &str) -> Result<(), super::InjectionError> {
+        use cocoa::base::{id, nil};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        unsafe {
+            let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+
+            // Save change count to detect if user copies during our paste
+            let change_count_before: i64 = msg_send![pasteboard, changeCount];
+
+            // Save all pasteboard items with all their type representations
+            let items: id = msg_send![pasteboard, pasteboardItems];
+            let item_count: usize = msg_send![items, count];
+            eprintln!(
+                "[clipboard_restore] Saving {} pasteboard items",
+                item_count
+            );
+
+            // Store items as Vec<Vec<(NSString type, NSData data)>>
+            let mut saved_items: Vec<Vec<(id, id)>> = Vec::with_capacity(item_count);
+            for i in 0..item_count {
+                let item: id = msg_send![items, objectAtIndex: i];
+                let types: id = msg_send![item, types];
+                let type_count: usize = msg_send![types, count];
+                let mut item_data: Vec<(id, id)> = Vec::with_capacity(type_count);
+                for j in 0..type_count {
+                    let ptype: id = msg_send![types, objectAtIndex: j];
+                    let data: id = msg_send![item, dataForType: ptype];
+                    if data != nil {
+                        // Retain both so they survive the clearContents below
+                        let _: () = msg_send![ptype, retain];
+                        let _: () = msg_send![data, retain];
+                        item_data.push((ptype, data));
+                    }
+                }
+                saved_items.push(item_data);
+            }
+
+            // Clear pasteboard and set our text
+            let _: i64 = msg_send![pasteboard, clearContents];
+
+            // Create text as NSString
+            let ns_text: id = {
+                let ns_string_class = class!(NSString);
+                let alloc: id = msg_send![ns_string_class, alloc];
+                let bytes = text.as_bytes();
+                let encoding: usize = 4; // NSUTF8StringEncoding
+                msg_send![alloc, initWithBytes:bytes.as_ptr() length:bytes.len() encoding:encoding]
+            };
+
+            // Set text on pasteboard
+            let string_type: id = msg_send![
+                class!(NSString),
+                stringWithUTF8String: b"public.utf8-plain-text\0".as_ptr()
+            ];
+            let _: bool = msg_send![pasteboard, setString:ns_text forType:string_type];
+
+            // Add transient type marker so clipboard managers ignore this
+            let transient_type: id = msg_send![
+                class!(NSString),
+                stringWithUTF8String: b"org.nspasteboard.TransientType\0".as_ptr()
+            ];
+            let empty_data: id = msg_send![class!(NSData), data];
+            let _: bool = msg_send![pasteboard, setData:empty_data forType:transient_type];
+
+            let _: () = msg_send![ns_text, release];
+
+            // Simulate Cmd+V
+            simulate_paste()?;
+
+            // Wait for target app to read the clipboard
+            thread::sleep(Duration::from_millis(150));
+
+            // Check if user copied something new during our paste
+            let change_count_after: i64 = msg_send![pasteboard, changeCount];
+            // We changed it twice (clearContents + setString), so expect +2
+            if change_count_after != change_count_before + 2 {
+                eprintln!(
+                    "[clipboard_restore] Change count mismatch (before={}, after={}), user may have copied — skipping restore",
+                    change_count_before, change_count_after
+                );
+                // Release saved data
+                for item_data in &saved_items {
+                    for &(ptype, data) in item_data {
+                        let _: () = msg_send![ptype, release];
+                        let _: () = msg_send![data, release];
+                    }
+                }
+                return Ok(());
+            }
+
+            // Restore saved pasteboard contents
+            let _: i64 = msg_send![pasteboard, clearContents];
+
+            if saved_items.is_empty() {
+                // Nothing to restore — pasteboard was empty before
+                eprintln!("[clipboard_restore] Pasteboard was empty, nothing to restore");
+            } else {
+                // Recreate NSPasteboardItems with all saved types
+                let items_array: id = msg_send![class!(NSMutableArray), arrayWithCapacity: saved_items.len()];
+                for item_data in &saved_items {
+                    let new_item: id = msg_send![class!(NSPasteboardItem), new];
+                    for &(ptype, data) in item_data {
+                        let _: bool = msg_send![new_item, setData:data forType:ptype];
+                        let _: () = msg_send![ptype, release];
+                        let _: () = msg_send![data, release];
+                    }
+                    let _: () = msg_send![items_array, addObject: new_item];
+                    let _: () = msg_send![new_item, release];
+                }
+                let _: bool = msg_send![pasteboard, writeObjects: items_array];
+                eprintln!("[clipboard_restore] Pasteboard restored ({} items)", saved_items.len());
+            }
+        }
 
         Ok(())
     }
 }
 
 // ============================================================================
-// Windows Implementation (SendInput via Win32 API)
+// Windows Implementation
 // ============================================================================
 #[cfg(target_os = "windows")]
 mod platform {
     use std::mem::size_of;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        VIRTUAL_KEY, VK_CONTROL, VK_V,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_V,
     };
 
     pub fn check_accessibility() -> bool {
-        true // No special permissions on Windows
+        true
     }
 
     pub fn simulate_paste() -> Result<(), super::InjectionError> {
         let inputs: [INPUT; 4] = [
-            make_key_input(VK_CONTROL, false), // Ctrl down
-            make_key_input(VK_V, false),       // V down
-            make_key_input(VK_V, true),        // V up
-            make_key_input(VK_CONTROL, true),  // Ctrl up
+            make_key_input(VK_CONTROL, false),
+            make_key_input(VK_V, false),
+            make_key_input(VK_V, true),
+            make_key_input(VK_CONTROL, true),
         ];
 
         let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
@@ -281,10 +460,127 @@ mod platform {
             },
         }
     }
+
+    // ── Tier 1: SendInput KEYEVENTF_UNICODE ────────────────────────────────
+
+    /// Inject text using batched SendInput with KEYEVENTF_UNICODE.
+    /// Each character is sent as down+up events with the UTF-16 code unit as scan code.
+    /// Batched in a single SendInput call for atomic, fast injection.
+    pub fn sendinput_unicode(text: &str) -> Result<(), super::InjectionError> {
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(text.len() * 4);
+        let mut utf16_buf = [0u16; 2];
+
+        for ch in text.chars() {
+            let encoded = ch.encode_utf16(&mut utf16_buf);
+            for &code_unit in encoded.iter() {
+                // Key down
+                inputs.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(0),
+                            wScan: code_unit,
+                            dwFlags: KEYEVENTF_UNICODE,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                });
+                // Key up
+                inputs.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(0),
+                            wScan: code_unit,
+                            dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                });
+            }
+        }
+
+        // Batch all events — chunk at ~5000 chars (~10000 events) due to OS limit
+        const MAX_EVENTS_PER_CALL: usize = 10_000;
+        for chunk in inputs.chunks(MAX_EVENTS_PER_CALL) {
+            let sent = unsafe { SendInput(chunk, size_of::<INPUT>() as i32) };
+            if sent != chunk.len() as u32 {
+                return Err(super::InjectionError::Failed(format!(
+                    "SendInput: only {sent}/{} events sent",
+                    chunk.len()
+                )));
+            }
+        }
+
+        eprintln!(
+            "[sendinput_unicode] Injected {} chars via {} events",
+            text.chars().count(),
+            inputs.len()
+        );
+        Ok(())
+    }
+
+    // ── Tier 2: Clipboard save/paste/restore ───────────────────────────────
+
+    /// Save all clipboard formats, paste text, restore original clipboard.
+    pub fn clipboard_save_paste_restore(text: &str) -> Result<(), super::InjectionError> {
+        use clipboard_win::{formats, Clipboard, Getter, Setter};
+
+        // Save current clipboard contents (text only — full format save is complex)
+        let saved_text = {
+            let _clip = Clipboard::new_attempts(10)
+                .map_err(|e| super::InjectionError::Failed(format!("Open clipboard: {}", e)))?;
+            let mut buf = String::new();
+            let _ = formats::Unicode.read_clipboard(&mut buf);
+            if buf.is_empty() {
+                None
+            } else {
+                Some(buf)
+            }
+        };
+
+        // Set our text
+        {
+            let _clip = Clipboard::new_attempts(10)
+                .map_err(|e| super::InjectionError::Failed(format!("Open clipboard: {}", e)))?;
+            formats::Unicode
+                .write_clipboard(&text)
+                .map_err(|e| super::InjectionError::Failed(format!("Write clipboard: {}", e)))?;
+        }
+
+        // Simulate Ctrl+V
+        simulate_paste()?;
+
+        // Wait for target app to read
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        // Restore
+        {
+            let _clip = Clipboard::new_attempts(10)
+                .map_err(|e| super::InjectionError::Failed(format!("Open clipboard: {}", e)))?;
+            if let Some(ref saved) = saved_text {
+                formats::Unicode
+                    .write_clipboard(saved)
+                    .map_err(|e| {
+                        super::InjectionError::Failed(format!("Restore clipboard: {}", e))
+                    })?;
+            } else {
+                let _ = clipboard_win::empty();
+            }
+        }
+
+        eprintln!(
+            "[clipboard_save_paste_restore] Injected {} chars, clipboard restored",
+            text.len()
+        );
+        Ok(())
+    }
 }
 
 // ============================================================================
-// Linux Implementation (XTest via X11)
+// Linux Implementation (unchanged — enigo fallback is fine)
 // ============================================================================
 #[cfg(target_os = "linux")]
 mod platform {
@@ -292,8 +588,8 @@ mod platform {
     use x11::xlib::{XCloseDisplay, XFlush, XKeysymToKeycode, XOpenDisplay};
     use x11::xtest::XTestFakeKeyEvent;
 
-    const XK_Control_L: u64 = 0xFFE3;
-    const XK_v: u64 = 0x0076;
+    const XK_CONTROL_L: u64 = 0xFFE3;
+    const XK_V: u64 = 0x0076;
 
     pub fn check_accessibility() -> bool {
         !is_wayland()
@@ -319,13 +615,13 @@ mod platform {
                 ));
             }
 
-            let ctrl = XKeysymToKeycode(display, XK_Control_L);
-            let v = XKeysymToKeycode(display, XK_v);
+            let ctrl = XKeysymToKeycode(display, XK_CONTROL_L);
+            let v = XKeysymToKeycode(display, XK_V);
 
-            XTestFakeKeyEvent(display, ctrl as u32, 1, 0); // Ctrl down
-            XTestFakeKeyEvent(display, v as u32, 1, 0); // V down
-            XTestFakeKeyEvent(display, v as u32, 0, 0); // V up
-            XTestFakeKeyEvent(display, ctrl as u32, 0, 0); // Ctrl up
+            XTestFakeKeyEvent(display, ctrl as u32, 1, 0);
+            XTestFakeKeyEvent(display, v as u32, 1, 0);
+            XTestFakeKeyEvent(display, v as u32, 0, 0);
+            XTestFakeKeyEvent(display, ctrl as u32, 0, 0);
 
             XFlush(display);
             XCloseDisplay(display);
@@ -343,7 +639,6 @@ fn truncate_for_display(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    // Find the largest char boundary <= max_bytes
     let mut end = max_bytes;
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
@@ -357,9 +652,14 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .output
         .insert_method
         .as_deref()
-        .unwrap_or("paste");
+        .unwrap_or("auto");
 
-    eprintln!("[inject] method={}, chars={}, bytes={}", method, text.chars().count(), text.len());
+    eprintln!(
+        "[inject] method={}, chars={}, bytes={}",
+        method,
+        text.chars().count(),
+        text.len()
+    );
 
     // Strip [BLANK_AUDIO] markers that Whisper outputs when no speech detected
     let text = text
@@ -367,35 +667,37 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
         .replace("[BLANK AUDIO]", "");
     let text = text.trim();
 
-    // Skip empty or whitespace-only text
     if text.is_empty() {
         eprintln!("[inject] Skipping empty text (after stripping BLANK_AUDIO markers)");
         return Ok(());
     }
 
-    eprintln!("[inject] Text after cleanup: '{}' ({} chars)",
-        truncate_for_display(text, 50), text.chars().count());
+    eprintln!(
+        "[inject] Text after cleanup: '{}' ({} chars)",
+        truncate_for_display(text, 50),
+        text.chars().count()
+    );
 
     // Check accessibility permissions
     if !platform::check_accessibility() {
         #[cfg(target_os = "macos")]
         {
-            eprintln!("[inject] ERROR: Accessibility permissions not granted");
             return Err(InjectionError::AccessibilityPermissionRequired);
         }
         #[cfg(target_os = "linux")]
         {
-            eprintln!("[inject] ERROR: Wayland not supported");
             return Err(InjectionError::WaylandNotSupported);
         }
     }
 
-    // Minimal focus delay (reduced from 300ms to 50ms)
+    // Minimal focus delay
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     let result = match method {
+        "auto" => inject_auto(text),
         "paste" => inject_via_paste(text),
-        _ => inject_via_typing(text),
+        "type" => inject_via_typing(text),
+        _ => inject_auto(text),
     };
 
     match &result {
@@ -406,7 +708,97 @@ pub fn inject_text(text: &str, settings: &UserSettings) -> Result<(), InjectionE
     result
 }
 
-/// Inject text via clipboard paste using native platform APIs
+/// Auto mode: use the tiered injection strategy per platform
+fn inject_auto(text: &str) -> Result<(), InjectionError> {
+    #[cfg(target_os = "macos")]
+    {
+        return inject_auto_macos(text);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return inject_auto_windows(text);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: try typing via enigo, fall back to paste
+        return inject_via_typing(text);
+    }
+}
+
+/// macOS auto mode: AX API → CGEvent typing → clipboard save/paste/restore
+#[cfg(target_os = "macos")]
+fn inject_auto_macos(text: &str) -> Result<(), InjectionError> {
+    // Tier 1: Try AX API first (instant, no clipboard, proper undo)
+    match platform::try_ax_insert(text) {
+        Ok(true) => {
+            log::info!("Text injected via AX API: {} chars", text.len());
+            return Ok(());
+        }
+        Ok(false) => {
+            eprintln!("[inject_auto] AX API not available for this element, trying CGEvent");
+        }
+        Err(e) => {
+            eprintln!("[inject_auto] AX API error: {}, trying CGEvent", e);
+        }
+    }
+
+    // Tier 2: CGEvent typing (works in ~95% of apps)
+    match platform::type_text(text) {
+        Ok(()) => {
+            log::info!("Text injected via CGEvent typing: {} chars", text.len());
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("[inject_auto] CGEvent typing failed: {}, trying clipboard", e);
+        }
+    }
+
+    // Tier 3: Clipboard save/paste/restore (last resort)
+    eprintln!("[inject_auto] Falling back to clipboard save/paste/restore");
+    platform::clipboard_save_paste_restore(text)?;
+    log::info!(
+        "Text injected via clipboard save/paste/restore: {} chars",
+        text.len()
+    );
+    Ok(())
+}
+
+/// Windows auto mode: SendInput KEYEVENTF_UNICODE → clipboard save/paste/restore
+#[cfg(target_os = "windows")]
+fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
+    // Tier 1: SendInput for text up to ~2000 chars
+    if text.chars().count() <= 2000 {
+        match platform::sendinput_unicode(text) {
+            Ok(()) => {
+                log::info!("Text injected via SendInput UNICODE: {} chars", text.len());
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!(
+                    "[inject_auto] SendInput failed: {}, trying clipboard",
+                    e
+                );
+            }
+        }
+    } else {
+        eprintln!(
+            "[inject_auto] Text too long for SendInput ({} chars), using clipboard",
+            text.chars().count()
+        );
+    }
+
+    // Tier 2: Clipboard save/paste/restore
+    platform::clipboard_save_paste_restore(text)?;
+    log::info!(
+        "Text injected via clipboard save/paste/restore: {} chars",
+        text.len()
+    );
+    Ok(())
+}
+
+/// Legacy paste mode: clipboard + Cmd+V/Ctrl+V (overwrites clipboard)
 fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
     use arboard::Clipboard;
 
@@ -417,40 +809,30 @@ fn inject_via_paste(text: &str) -> Result<(), InjectionError> {
         .set_text(text)
         .map_err(|e| InjectionError::Failed(format!("Set text: {}", e)))?;
 
-    // Simulate paste using native platform API (no delay needed - clipboard is synchronous)
     platform::simulate_paste()?;
 
-    // Brief delay before clearing (reduced from 500ms to 50ms)
     std::thread::sleep(std::time::Duration::from_millis(50));
-
     clipboard.clear().ok();
-    eprintln!("[inject] Clipboard cleared");
 
     log::info!("Text injected via paste: {} chars", text.len());
     Ok(())
 }
 
-/// Inject text by simulating keyboard input
+/// Legacy type mode: CGEvent on macOS, enigo on other platforms
 fn inject_via_typing(text: &str) -> Result<(), InjectionError> {
-    eprintln!("[inject_via_typing] Starting type injection for {} chars", text.len());
-
-    // On macOS, use our native CGEvent implementation for better Unicode support
     #[cfg(target_os = "macos")]
     {
-        eprintln!("[inject_via_typing] Using native macOS CGEvent implementation");
         let result = platform::type_text(text);
         if result.is_ok() {
-            log::info!("Text injected via native macOS typing: {} chars", text.len());
+            log::info!("Text injected via CGEvent typing: {} chars", text.len());
         }
         return result;
     }
 
-    // On other platforms, fall back to enigo
     #[cfg(not(target_os = "macos"))]
     {
         use enigo::{Enigo, Keyboard, Settings};
 
-        eprintln!("[inject_via_typing] Using enigo for text injection");
         let mut enigo =
             Enigo::new(&Settings::default()).map_err(|e| InjectionError::Failed(e.to_string()))?;
 
