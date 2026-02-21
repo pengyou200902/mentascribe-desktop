@@ -36,7 +36,7 @@ html, body, #root {
 }
 
 /* ============================================
-   DICTATION WIDGET STYLES (Wispr Flow-inspired)
+   DICTATION WIDGET STYLES (WisperFlow-inspired)
    ============================================ */
 
 .dictation-container {
@@ -52,33 +52,56 @@ html, body, #root {
   margin: 0;
 }
 
-/* ---- Wispr-style Pill ---- */
+/* ---- Hitbox: transparent hover-detection area around the pill ---- */
+.wispr-hitbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+/* ---- Wispr-style Pill: collapsed idle by default (tiny slim pill) ---- */
 .wispr-pill {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 90px;
+  min-width: 56px;
+  height: 10px;
+  padding: 0;
+  background: rgba(20, 20, 20, 0.85);
+  border-radius: 5px;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---- Expanded Hint: WisperFlow tooltip on hover (idle only) ---- */
+.wispr-pill.expanded {
+  min-width: 280px;
+  height: 66px;
+  padding: 12px 20px;
+  background: #FDF6E3;
+  border-radius: 16px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- Active States: recording/processing (medium dark pill) ---- */
+.wispr-pill.active {
+  min-width: 100px;
   height: 36px;
   padding: 0 16px;
   background: rgba(20, 20, 20, 0.95);
   border-radius: 20px;
-  cursor: default;
-  user-select: none;
-  -webkit-user-select: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.wispr-pill:hover {
-  background: rgba(30, 30, 30, 0.95);
-}
-
-.wispr-pill.active {
-  min-width: 100px;
 }
 
 .wispr-pill.has-error {
   min-width: 120px;
+  height: 36px;
+  padding: 0 16px;
   background: rgba(30, 15, 15, 0.95);
+  border-radius: 20px;
 }
 
 .wispr-content {
@@ -86,9 +109,10 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   height: 100%;
+  animation: wispr-fade-in 0.15s ease-out;
 }
 
-/* ---- Idle State: Horizontal Dash ---- */
+/* ---- Idle State: Horizontal Dash (collapsed indicator) ---- */
 .wispr-idle {
   display: flex;
   align-items: center;
@@ -96,16 +120,68 @@ html, body, #root {
 }
 
 .wispr-dash {
-  width: 32px;
+  width: 28px;
   height: 3px;
   background: rgba(255, 255, 255, 0.4);
   border-radius: 2px;
-  transition: all 0.2s ease;
 }
 
-.wispr-pill:hover .wispr-dash {
-  width: 36px;
-  background: rgba(255, 255, 255, 0.55);
+/* ---- Expanded Hint Content ---- */
+.wispr-expanded-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  animation: wispr-fade-in 0.2s ease-out;
+}
+
+.wispr-hint-text {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1a1a1a;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.wispr-hint-key {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 2px;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c026d3;
+  background: rgba(192, 38, 211, 0.08);
+  border-radius: 4px;
+}
+
+.wispr-hint-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 16px;
+  background: rgba(20, 20, 20, 0.85);
+  border-radius: 10px;
+}
+
+.wispr-hint-dot {
+  width: 3px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 50%;
+}
+
+@keyframes wispr-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 /* ---- Recording State: Waveform Bars ---- */
@@ -251,9 +327,11 @@ html, body, #root {
 /* Pill modifier for initializing state */
 .wispr-pill.initializing {
   min-width: 130px;
+  height: 36px;
+  padding: 0 16px;
   background: rgba(25, 22, 18, 0.95);
   border: 1px solid rgba(245, 181, 79, 0.15);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 20px;
 }
 
 /* Smooth transition when initializing completes */
@@ -270,7 +348,7 @@ html, body, #root {
     border-color: rgba(74, 222, 128, 0.4);
   }
   100% {
-    min-width: 90px;
+    min-width: 56px;
     border-color: transparent;
   }
 }

@@ -12,6 +12,7 @@ interface DictationBarProps {
   statusOverride?: string;
   draggable?: boolean;
   opacity?: number;
+  hotkeyKey?: string;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
@@ -22,6 +23,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   error = null,
   draggable = false,
   opacity = 1.0,
+  hotkeyKey = 'Fn',
 }) => {
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
@@ -53,6 +55,7 @@ export const DictationBar: FC<DictationBarProps> = ({
 
   // Determine state
   const isActive = isRecording || isProcessing;
+  const showExpandedHint = isHovered && !isActive && !error && !isPreloading && !initComplete;
 
   // Keep refs in sync
   useEffect(() => {
@@ -72,7 +75,7 @@ export const DictationBar: FC<DictationBarProps> = ({
     const handleMouseMove = (e: MouseEvent) => {
       if (!widgetRef.current) return;
       const rect = widgetRef.current.getBoundingClientRect();
-      const padding = 8;
+      const padding = 4;
       const isInside =
         e.clientX >= rect.left - padding &&
         e.clientX <= rect.right + padding &&
@@ -158,8 +161,8 @@ export const DictationBar: FC<DictationBarProps> = ({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
-  // Dynamically resize the Tauri window to match the pill dimensions
-  // so there are no invisible boundaries around the widget
+  // Dynamically resize the Tauri window to match the hitbox dimensions
+  // The hitbox includes transparent padding around the pill for proximity hover detection
   useEffect(() => {
     if (!widgetRef.current) return;
     const win = getCurrentWindow();
@@ -192,10 +195,24 @@ export const DictationBar: FC<DictationBarProps> = ({
     });
   }, [draggable, flog]);
 
-  // Render idle state - simple horizontal dash
+  // Render idle state - simple horizontal dash (collapsed pill indicator)
   const renderIdle = () => (
     <div className="wispr-idle">
       <div className="wispr-dash" />
+    </div>
+  );
+
+  // Render expanded hint - WisperFlow-style tooltip with hotkey instruction
+  const renderExpandedHint = () => (
+    <div className="wispr-expanded-content">
+      <span className="wispr-hint-text">
+        Click or hold <kbd className="wispr-hint-key">{hotkeyKey}</kbd> to start dictating
+      </span>
+      <div className="wispr-hint-indicator">
+        {Array(10).fill(0).map((_, i) => (
+          <div key={i} className="wispr-hint-dot" />
+        ))}
+      </div>
     </div>
   );
 
@@ -247,23 +264,41 @@ export const DictationBar: FC<DictationBarProps> = ({
     </div>
   );
 
+  // Build pill CSS classes
+  const pillClasses = [
+    'wispr-pill',
+    showExpandedHint ? 'expanded' : '',
+    isActive ? 'active' : '',
+    error ? 'has-error' : '',
+    isPreloading ? 'initializing' : '',
+    initComplete ? 'init-complete' : '',
+  ].filter(Boolean).join(' ');
+
   return (
     <div
       ref={widgetRef}
-      className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
-      style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
-      onMouseDown={handleMouseDown}
+      className="wispr-hitbox"
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
       onMouseEnter={handlePointerEnter}
       onMouseLeave={handlePointerLeave}
     >
-      <div className="wispr-content">
-        {error ? renderError() :
-         isProcessing ? renderProcessing() :
-         isRecording ? renderRecording() :
-         isPreloading ? renderInitializing() :
-         renderIdle()}
+      <div
+        className={pillClasses}
+        style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
+        onMouseDown={handleMouseDown}
+      >
+        {showExpandedHint ? (
+          renderExpandedHint()
+        ) : (
+          <div className="wispr-content">
+            {error ? renderError() :
+             isProcessing ? renderProcessing() :
+             isRecording ? renderRecording() :
+             isPreloading ? renderInitializing() :
+             renderIdle()}
+          </div>
+        )}
       </div>
     </div>
   );
