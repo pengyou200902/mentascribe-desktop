@@ -15,8 +15,8 @@
       {
         "label": "dictation",
         "title": "MentaScribe",
-        "width": 140,
-        "height": 48,
+        "width": 80,
+        "height": 28,
         "resizable": false,
         "fullscreen": false,
         "visible": false,

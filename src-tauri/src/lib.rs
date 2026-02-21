@@ -852,8 +852,8 @@ fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json).
 /// These are initial/fallback values; the frontend dynamically resizes the window to match
 /// the pill widget, so native positioning uses the actual window frame size instead.
-const DICTATION_WINDOW_WIDTH: f64 = 140.0;
-const DICTATION_WINDOW_HEIGHT: f64 = 48.0;
+const DICTATION_WINDOW_WIDTH: f64 = 80.0;
+const DICTATION_WINDOW_HEIGHT: f64 = 28.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
 const DOCK_OFFSET: f64 = 20.0;
 
@@ -964,6 +964,54 @@ fn native_position_on_cursor_monitor(app: &tauri::AppHandle, only_if_different_m
 
         Ok(true)
     }
+}
+
+/// Resize the dictation pill window while keeping its bottom edge and horizontal center fixed.
+///
+/// Called by the frontend's ResizeObserver when the pill CSS-transitions between collapsed
+/// and expanded states. Uses `setFrame:display:` to atomically set both size and position,
+/// preventing the visual jump that `setContentSize:` would cause (it preserves the top-left
+/// corner, but we need the bottom edge anchored so the pill grows upward).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    use cocoa::foundation::NSPoint;
+    use objc::{msg_send, sel, sel_impl};
+    use tauri_nspanel::ManagerExt;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect { origin: NSPoint, size: NSPoint }
+
+    let panel = app.get_webview_panel("dictation")
+        .map_err(|e| format!("{:?}", e))?;
+
+    unsafe {
+        let old_frame: NSRect = msg_send![&*panel, frame];
+
+        // Keep bottom edge (origin.y) fixed, re-center horizontally
+        let old_center_x = old_frame.origin.x + old_frame.size.x / 2.0;
+        let new_frame = NSRect {
+            origin: NSPoint::new(old_center_x - width / 2.0, old_frame.origin.y),
+            size: NSPoint::new(width, height),
+        };
+
+        let display: i8 = 1; // BOOL YES
+        let _: () = msg_send![&*panel, setFrame:new_frame display:display];
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("dictation") {
+        win.set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Open the dashboard window, optionally navigating to a specific page.
@@ -1315,6 +1363,7 @@ pub fn run() {
             // Window positioning
             reposition_to_mouse_monitor,
             start_native_drag,
+            resize_pill,
             // Debug
             frontend_log,
         ])

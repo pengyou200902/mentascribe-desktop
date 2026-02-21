@@ -1,6 +1,5 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { LogicalSize } from '@tauri-apps/api/dpi';
 import { invoke } from '@tauri-apps/api/core';
 
 interface DictationBarProps {
@@ -53,6 +52,7 @@ export const DictationBar: FC<DictationBarProps> = ({
 
   // Determine state
   const isActive = isRecording || isProcessing;
+  const isExpanded = isHovered || isActive || isPreloading || !!error || initComplete;
 
   // Keep refs in sync
   useEffect(() => {
@@ -158,17 +158,17 @@ export const DictationBar: FC<DictationBarProps> = ({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 
-  // Dynamically resize the Tauri window to match the pill dimensions
-  // so there are no invisible boundaries around the widget
+  // Dynamically resize the Tauri window to match the hover zone dimensions.
+  // Uses resize_pill Rust command which atomically sets size + position via
+  // setFrame:display:, keeping the bottom edge fixed so the pill grows upward.
   useEffect(() => {
     if (!widgetRef.current) return;
-    const win = getCurrentWindow();
     const observer = new ResizeObserver(() => {
       if (!widgetRef.current) return;
       const w = widgetRef.current.offsetWidth;
       const h = widgetRef.current.offsetHeight;
       if (w > 0 && h > 0) {
-        win.setSize(new LogicalSize(w, h)).catch(() => {});
+        invoke('resize_pill', { width: w, height: h }).catch(() => {});
       }
     });
     observer.observe(widgetRef.current);
@@ -192,10 +192,11 @@ export const DictationBar: FC<DictationBarProps> = ({
     });
   }, [draggable, flog]);
 
-  // Render idle state - simple horizontal dash
-  const renderIdle = () => (
+  // Render expanded idle state - dash with tooltip label
+  const renderExpandedIdle = () => (
     <div className="wispr-idle">
       <div className="wispr-dash" />
+      <span className="wispr-tooltip-label">MentaScribe</span>
     </div>
   );
 
@@ -250,20 +251,28 @@ export const DictationBar: FC<DictationBarProps> = ({
   return (
     <div
       ref={widgetRef}
-      className={`wispr-pill ${isActive ? 'active' : ''} ${isHovered ? 'hovered' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
-      style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
-      onMouseDown={handleMouseDown}
+      className="wispr-hover-zone"
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
       onMouseEnter={handlePointerEnter}
       onMouseLeave={handlePointerLeave}
     >
-      <div className="wispr-content">
-        {error ? renderError() :
-         isProcessing ? renderProcessing() :
-         isRecording ? renderRecording() :
-         isPreloading ? renderInitializing() :
-         renderIdle()}
+      <div
+        className={`wispr-pill ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
+        style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
+        onMouseDown={handleMouseDown}
+      >
+        <div className="wispr-content">
+          {isExpanded ? (
+            error ? renderError() :
+            isProcessing ? renderProcessing() :
+            isRecording ? renderRecording() :
+            isPreloading ? renderInitializing() :
+            renderExpandedIdle()
+          ) : (
+            <div className="wispr-collapsed-dash" />
+          )}
+        </div>
       </div>
     </div>
   );

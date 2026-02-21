@@ -52,31 +52,53 @@ html, body, #root {
   margin: 0;
 }
 
-/* ---- Wispr-style Pill ---- */
+/* ---- Hover Zone (proximity detection above pill) ---- */
+.wispr-hover-zone {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-top: 14px;
+}
+
+/* ---- Pill Base ---- */
 .wispr-pill {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 90px;
-  height: 36px;
-  padding: 0 16px;
-  background: rgba(20, 20, 20, 0.95);
-  border-radius: 20px;
+  overflow: hidden;
   cursor: default;
   user-select: none;
   -webkit-user-select: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.wispr-pill:hover {
+/* ---- Collapsed State (default idle) ---- */
+.wispr-pill.collapsed {
+  height: 10px;
+  min-width: 52px;
+  padding: 0 10px;
+  background: rgba(28, 28, 28, 0.80);
+  border-radius: 5px;
+}
+
+/* ---- Expanded State (hovered or active) ---- */
+.wispr-pill.expanded {
+  height: 36px;
+  min-width: 90px;
+  padding: 0 16px;
+  background: rgba(20, 20, 20, 0.95);
+  border-radius: 20px;
+}
+
+.wispr-pill.expanded:hover {
   background: rgba(30, 30, 30, 0.95);
 }
 
-.wispr-pill.active {
+.wispr-pill.expanded.active {
   min-width: 100px;
 }
 
-.wispr-pill.has-error {
+.wispr-pill.expanded.has-error {
   min-width: 120px;
   background: rgba(30, 15, 15, 0.95);
 }
@@ -88,11 +110,20 @@ html, body, #root {
   height: 100%;
 }
 
-/* ---- Idle State: Horizontal Dash ---- */
+/* ---- Collapsed Dash (ultra-slim indicator) ---- */
+.wispr-collapsed-dash {
+  width: 20px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 1px;
+}
+
+/* ---- Expanded Idle: Dash + Tooltip Label ---- */
 .wispr-idle {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
 }
 
 .wispr-dash {
@@ -103,9 +134,12 @@ html, body, #root {
   transition: all 0.2s ease;
 }
 
-.wispr-pill:hover .wispr-dash {
-  width: 36px;
-  background: rgba(255, 255, 255, 0.55);
+.wispr-tooltip-label {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
 }
 
 /* ---- Recording State: Waveform Bars ---- */
@@ -249,7 +283,7 @@ html, body, #root {
 }
 
 /* Pill modifier for initializing state */
-.wispr-pill.initializing {
+.wispr-pill.expanded.initializing {
   min-width: 130px;
   background: rgba(25, 22, 18, 0.95);
   border: 1px solid rgba(245, 181, 79, 0.15);
