@@ -202,14 +202,12 @@ export const DictationBar: FC<DictationBarProps> = ({
     </div>
   );
 
-  // Render expanded hint - WisperFlow-style: dark text pill + dark dot bar on cream background
+  // Render expanded hint - WisperFlow-style tooltip with hotkey instruction
   const renderExpandedHint = () => (
     <div className="wispr-expanded-content">
-      <div className="wispr-hint-text-pill">
-        <span className="wispr-hint-text">
-          Click or hold <kbd className="wispr-hint-key">{hotkeyKey}</kbd> to start dictating
-        </span>
-      </div>
+      <span className="wispr-hint-text">
+        Click or hold <kbd className="wispr-hint-key">{hotkeyKey}</kbd> to start dictating
+      </span>
       <div className="wispr-hint-indicator">
         {Array(10).fill(0).map((_, i) => (
           <div key={i} className="wispr-hint-dot" />
