@@ -302,7 +302,6 @@ function App() {
         statusOverride={isDownloadingModel ? 'Downloading model...' : undefined}
         draggable={draggableValue}
         opacity={opacityValue}
-        hotkeyKey={settings?.hotkey?.key}
       />
     </div>
   );
