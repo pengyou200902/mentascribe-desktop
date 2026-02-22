@@ -46,10 +46,17 @@ html, body, #root {
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
   padding: 0;
   margin: 0;
+}
+
+/* ---- Widget Container (tooltip + pill column) ---- */
+.wispr-widget {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 /* ---- Pill Base ---- */
@@ -74,19 +81,25 @@ html, body, #root {
 
 /* ---- Expanded State (hovered or active) ---- */
 .wispr-pill.expanded {
-  height: 36px;
-  min-width: 90px;
-  padding: 0 16px;
+  height: 28px;
+  min-width: 80px;
+  padding: 0 14px;
   background: rgba(20, 20, 20, 0.95);
-  border-radius: 20px;
+  border-radius: 16px;
 }
 
 .wispr-pill.expanded.active {
+  height: 36px;
   min-width: 100px;
+  padding: 0 16px;
+  border-radius: 20px;
 }
 
 .wispr-pill.expanded.has-error {
+  height: 36px;
   min-width: 120px;
+  padding: 0 16px;
+  border-radius: 20px;
   background: rgba(30, 15, 15, 0.95);
 }
 
@@ -97,28 +110,49 @@ html, body, #root {
   height: 100%;
 }
 
-/* ---- Expanded Idle: Dash + Tooltip Label ---- */
-.wispr-idle {
+/* ---- Tooltip above pill (WisperFlow-style) ---- */
+.wispr-tooltip {
+  background: #f8f4ec;
+  border-radius: 14px;
+  padding: 8px 16px;
+  margin-bottom: 6px;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1c1917;
+  white-space: nowrap;
+  animation: wispr-tooltip-in 0.2s ease-out;
+}
+
+.wispr-hotkey {
+  color: #c026d3;
+  font-weight: 700;
+}
+
+@keyframes wispr-tooltip-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Expanded Idle: Dots inside pill ---- */
+.wispr-idle-dots {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 4px;
 }
 
-.wispr-dash {
-  width: 32px;
+.wispr-idle-dot {
+  width: 3px;
   height: 3px;
-  background: rgba(255, 255, 255, 0.4);
-  border-radius: 2px;
-  transition: all 0.2s ease;
-}
-
-.wispr-tooltip-label {
-  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.5);
-  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
 }
 
 /* ---- Recording State: Waveform Bars ---- */
@@ -263,7 +297,10 @@ html, body, #root {
 
 /* Pill modifier for initializing state */
 .wispr-pill.expanded.initializing {
+  height: 36px;
   min-width: 130px;
+  padding: 0 16px;
+  border-radius: 20px;
   background: rgba(25, 22, 18, 0.95);
   border: 1px solid rgba(245, 181, 79, 0.15);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);

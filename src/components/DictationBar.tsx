@@ -10,6 +10,7 @@ interface DictationBarProps {
   statusOverride?: string;
   draggable?: boolean;
   opacity?: number;
+  hotkeyLabel?: string;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
@@ -20,6 +21,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   error = null,
   draggable = false,
   opacity = 1.0,
+  hotkeyLabel = 'fn',
 }) => {
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
@@ -52,6 +54,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   // Determine state
   const isActive = isRecording || isProcessing;
   const isExpanded = isHovered || isActive || isPreloading || !!error || initComplete;
+  const isIdle = isExpanded && !isActive && !isPreloading && !error && !initComplete;
 
   // Keep refs in sync
   useEffect(() => {
@@ -158,11 +161,12 @@ export const DictationBar: FC<DictationBarProps> = ({
     });
   }, [draggable, flog]);
 
-  // Render expanded idle state - dash with tooltip label
+  // Render expanded idle state - subtle dots inside pill
   const renderExpandedIdle = () => (
-    <div className="wispr-idle">
-      <div className="wispr-dash" />
-      <span className="wispr-tooltip-label">MentaScribe</span>
+    <div className="wispr-idle-dots">
+      {Array(10).fill(0).map((_, i) => (
+        <div key={i} className="wispr-idle-dot" />
+      ))}
     </div>
   );
 
@@ -217,19 +221,28 @@ export const DictationBar: FC<DictationBarProps> = ({
   return (
     <div
       ref={widgetRef}
-      className={`wispr-pill ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
+      className="wispr-widget"
       style={{ opacity, ...(draggable ? { cursor: 'grab' } : {}) }}
       onMouseDown={handleMouseDown}
     >
-      {isExpanded && (
-        <div className="wispr-content">
-          {error ? renderError() :
-           isProcessing ? renderProcessing() :
-           isRecording ? renderRecording() :
-           isPreloading ? renderInitializing() :
-           renderExpandedIdle()}
+      {isIdle && (
+        <div className="wispr-tooltip">
+          Click or hold <span className="wispr-hotkey">{hotkeyLabel}</span> to start dictating
         </div>
       )}
+      <div
+        className={`wispr-pill ${isExpanded ? 'expanded' : 'collapsed'} ${isActive ? 'active' : ''} ${error ? 'has-error' : ''} ${isPreloading ? 'initializing' : ''} ${initComplete ? 'init-complete' : ''}`}
+      >
+        {isExpanded && (
+          <div className="wispr-content">
+            {error ? renderError() :
+             isProcessing ? renderProcessing() :
+             isRecording ? renderRecording() :
+             isPreloading ? renderInitializing() :
+             renderExpandedIdle()}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
