@@ -166,7 +166,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   // Render expanded idle state - subtle dots inside pill
   const renderExpandedIdle = () => (
     <div className="wispr-idle-dots">
-      {Array(10).fill(0).map((_, i) => (
+      {Array(9).fill(0).map((_, i) => (
         <div key={i} className="wispr-idle-dot" />
       ))}
     </div>
