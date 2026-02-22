@@ -1,5 +1,14 @@
 import { FC, useEffect, useState, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  WAVEFORM_BAR_COUNT, WAVEFORM_INITIAL_HEIGHT, WAVEFORM_UPDATE_INTERVAL_MS,
+  WAVEFORM_SMOOTHING, WAVEFORM_BASE_MIN, WAVEFORM_CENTER_AMPLITUDE,
+  WAVEFORM_NOISE_RANGE, WAVEFORM_RANDOM_RANGE, AUDIO_BOOST_BASE,
+  AUDIO_BOOST_RANGE, WAVEFORM_MAX_HEIGHT, BAR_MIN_HEIGHT_PX, BAR_HEIGHT_SCALE,
+  PROCESSING_DOT_COUNT, PROCESSING_DOT_DELAY_STEP,
+  CURSOR_POLL_INTERVAL_MS, PRELOAD_FLASH_DURATION_MS,
+  DEFAULT_HOTKEY_LABEL, DEFAULT_HOTKEY_MODE,
+} from '../config/widget';
 
 interface DictationBarProps {
   isRecording: boolean;
@@ -22,17 +31,17 @@ export const DictationBar: FC<DictationBarProps> = ({
   error = null,
   draggable = false,
   opacity = 1.0,
-  hotkeyLabel = 'F6',
-  hotkeyMode = 'toggle',
+  hotkeyLabel = DEFAULT_HOTKEY_LABEL,
+  hotkeyMode = DEFAULT_HOTKEY_MODE,
 }) => {
   const audioLevelRef = useRef(audioLevel);
-  const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
+  const [waveformBars, setWaveformBars] = useState<number[]>(Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT));
   const [isHovered, setIsHovered] = useState(false);
   const [initComplete, setInitComplete] = useState(false);
   const prevPreloadingRef = useRef(isPreloading);
   const widgetRef = useRef<HTMLDivElement>(null);
-  const prevLevelsRef = useRef<number[]>(Array(9).fill(0.3));
-  const targetHeightsRef = useRef<number[]>(Array(9).fill(0.3));
+  const prevLevelsRef = useRef<number[]>(Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT));
+  const targetHeightsRef = useRef<number[]>(Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT));
   const lastUpdateRef = useRef(0);
   const prevDraggableRef = useRef(draggable);
 
@@ -41,7 +50,7 @@ export const DictationBar: FC<DictationBarProps> = ({
     if (prevPreloadingRef.current && !isPreloading) {
       // Preload just finished — show brief completion flash
       setInitComplete(true);
-      const timer = setTimeout(() => setInitComplete(false), 600);
+      const timer = setTimeout(() => setInitComplete(false), PRELOAD_FLASH_DURATION_MS);
       return () => clearTimeout(timer);
     }
     prevPreloadingRef.current = isPreloading;
@@ -72,22 +81,22 @@ export const DictationBar: FC<DictationBarProps> = ({
         const over = await invoke<boolean>('is_cursor_over_pill');
         setIsHovered(over);
       } catch {}
-    }, 100);
+    }, CURSOR_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
 
   // Animate waveform only when recording
   useEffect(() => {
     if (!isRecording) {
-      setWaveformBars(Array(9).fill(0.3));
-      prevLevelsRef.current = Array(9).fill(0.3);
-      targetHeightsRef.current = Array(9).fill(0.3);
+      setWaveformBars(Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT));
+      prevLevelsRef.current = Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT);
+      targetHeightsRef.current = Array(WAVEFORM_BAR_COUNT).fill(WAVEFORM_INITIAL_HEIGHT);
       lastUpdateRef.current = 0;
       return;
     }
 
     // Recording: animate based on audio level
-    const initialHeights = Array(9).fill(0).map(() => 0.3 + Math.random() * 0.4);
+    const initialHeights = Array(WAVEFORM_BAR_COUNT).fill(0).map(() => WAVEFORM_INITIAL_HEIGHT + Math.random() * WAVEFORM_RANDOM_RANGE);
     prevLevelsRef.current = initialHeights;
     targetHeightsRef.current = initialHeights;
     setWaveformBars(initialHeights);
@@ -97,22 +106,21 @@ export const DictationBar: FC<DictationBarProps> = ({
     const animate = () => {
       const level = audioLevelRef.current;
       const now = Date.now();
-      const updateInterval = 50;
-
-      if (now - lastUpdateRef.current > updateInterval) {
+      if (now - lastUpdateRef.current > WAVEFORM_UPDATE_INTERVAL_MS) {
         lastUpdateRef.current = now;
         targetHeightsRef.current = targetHeightsRef.current.map((_, i) => {
           // Create a wave-like pattern with center bars taller
-          const centerFactor = 1 - Math.abs(i - 4) / 5;
-          const baseHeight = 0.25 + centerFactor * 0.3 + Math.random() * 0.2;
-          const audioBoost = level * (0.4 + Math.random() * 0.4);
-          return Math.min(1.0, baseHeight + audioBoost);
+          const centerIdx = (WAVEFORM_BAR_COUNT - 1) / 2;
+          const centerFactor = 1 - Math.abs(i - centerIdx) / (centerIdx + 1);
+          const baseHeight = WAVEFORM_BASE_MIN + centerFactor * WAVEFORM_CENTER_AMPLITUDE + Math.random() * WAVEFORM_NOISE_RANGE;
+          const audioBoost = level * (AUDIO_BOOST_BASE + Math.random() * AUDIO_BOOST_RANGE);
+          return Math.min(WAVEFORM_MAX_HEIGHT, baseHeight + audioBoost);
         });
       }
 
       const newBars = prevLevelsRef.current.map((prevHeight, i) => {
         const target = targetHeightsRef.current[i];
-        const smoothing = 0.35;
+        const smoothing = WAVEFORM_SMOOTHING;
         return prevHeight + (target - prevHeight) * smoothing;
       });
 
@@ -166,7 +174,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   // Render expanded idle state - subtle dots inside pill
   const renderExpandedIdle = () => (
     <div className="wispr-idle-dots">
-      {Array(9).fill(0).map((_, i) => (
+      {Array(WAVEFORM_BAR_COUNT).fill(0).map((_, i) => (
         <div key={i} className="wispr-idle-dot" />
       ))}
     </div>
@@ -194,7 +202,7 @@ export const DictationBar: FC<DictationBarProps> = ({
           key={i}
           className="wispr-bar"
           style={{
-            height: `${Math.round(Math.max(4, height * 20))}px`,
+            height: `${Math.round(Math.max(BAR_MIN_HEIGHT_PX, height * BAR_HEIGHT_SCALE))}px`,
           }}
         />
       ))}
@@ -205,8 +213,8 @@ export const DictationBar: FC<DictationBarProps> = ({
   const renderProcessing = () => (
     <div className="wispr-processing">
       <div className="wispr-dots">
-        {Array(8).fill(0).map((_, i) => (
-          <div key={i} className="wispr-dot" style={{ animationDelay: `${i * 0.1}s` }} />
+        {Array(PROCESSING_DOT_COUNT).fill(0).map((_, i) => (
+          <div key={i} className="wispr-dot" style={{ animationDelay: `${i * PROCESSING_DOT_DELAY_STEP}s` }} />
         ))}
       </div>
       <div className="wispr-spinner" />

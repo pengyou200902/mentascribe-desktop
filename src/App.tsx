@@ -4,6 +4,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { DictationBar } from './components/DictationBar';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { useStore } from './lib/store';
+import {
+  MAX_HISTORY_ENTRIES, MIC_ERROR_TIMEOUT_MS, ERROR_TIMEOUT_MS,
+  MODEL_PRELOAD_ERROR_TIMEOUT_MS, MODEL_DOWNLOAD_ERROR_TIMEOUT_MS,
+  MONITOR_POLL_INTERVAL_MS, MONITOR_LOG_FREQUENCY,
+  DEFAULT_HOTKEY_LABEL, DEFAULT_HOTKEY_MODE, DEFAULT_WIDGET_OPACITY,
+} from './config/widget';
 
 type WindowType = 'dictation' | 'dashboard';
 
@@ -32,7 +38,7 @@ function App() {
         timestamp: new Date().toISOString(),
       });
       // Keep only last 100 entries
-      const trimmed = history.slice(0, 100);
+      const trimmed = history.slice(0, MAX_HISTORY_ENTRIES);
       localStorage.setItem('transcription-history', JSON.stringify(trimmed));
     } catch (e) {
       console.error('Failed to save to history:', e);
@@ -79,7 +85,7 @@ function App() {
       console.error('Failed to start recording:', error);
       // Show brief error so user gets feedback (clears quickly)
       setError('Mic busy — try again');
-      setTimeout(() => setError(null), 2000);
+      setTimeout(() => setError(null), MIC_ERROR_TIMEOUT_MS);
     }
   }, []);
 
@@ -108,7 +114,7 @@ function App() {
           console.error('Failed to inject text:', injectionError);
           setError(`Failed to paste: ${injectionError}`);
           // Clear error after 5 seconds
-          setTimeout(() => setError(null), 5000);
+          setTimeout(() => setError(null), ERROR_TIMEOUT_MS);
         }
       } else {
         console.log('No text transcribed (empty result)');
@@ -131,7 +137,7 @@ function App() {
       } else {
         setError(`Failed: ${errorMessage}`);
       }
-      setTimeout(() => setError(null), 5000);
+      setTimeout(() => setError(null), ERROR_TIMEOUT_MS);
     } finally {
       isProcessingRef.current = false; // Reset ref immediately
       setIsProcessing(false); // Always reset processing state
@@ -161,7 +167,7 @@ function App() {
           console.log(`[poll] reposition_to_mouse_monitor returned TRUE (moved) at poll #${pollCount}`);
         }
         // Log draggable state every ~3 seconds
-        if (pollCount % 20 === 0) {
+        if (pollCount % MONITOR_LOG_FREQUENCY === 0) {
           console.log(`[poll] poll #${pollCount}, draggable=${settingsRef.current?.widget?.draggable}`);
         }
       } catch (err) {
@@ -170,7 +176,7 @@ function App() {
     };
 
     // Check every 150ms for monitor changes (fast enough to feel responsive)
-    const intervalId = setInterval(checkMouseMonitor, 150);
+    const intervalId = setInterval(checkMouseMonitor, MONITOR_POLL_INTERVAL_MS);
     console.log(`[poll] Started 150ms monitor tracking, draggable=${settings?.widget?.draggable}`);
 
     return () => {
@@ -186,7 +192,7 @@ function App() {
       // to prevent race conditions where both windows invoke start/stop simultaneously
       if (windowType !== 'dictation') return;
 
-      const mode = settingsRef.current?.hotkey?.mode ?? 'toggle'; // Default to toggle
+      const mode = settingsRef.current?.hotkey?.mode ?? DEFAULT_HOTKEY_MODE; // Default to toggle
       console.log('Hotkey pressed, mode:', mode, 'isRecording:', isRecordingRef.current);
 
       if (mode === 'toggle') {
@@ -204,7 +210,7 @@ function App() {
     const unlistenReleased = listen('hotkey-released', async () => {
       if (windowType !== 'dictation') return;
 
-      const mode = settingsRef.current?.hotkey?.mode ?? 'toggle';
+      const mode = settingsRef.current?.hotkey?.mode ?? DEFAULT_HOTKEY_MODE;
       console.log('Hotkey released, mode:', mode, 'isRecording:', isRecordingRef.current);
 
       if (mode !== 'toggle' && isRecordingRef.current) {
@@ -243,7 +249,7 @@ function App() {
       setIsPreloading(false);
       // Show a brief error then clear it — preload failure is non-fatal
       setError(`Model warmup failed`);
-      setTimeout(() => setError(null), 3000);
+      setTimeout(() => setError(null), MODEL_PRELOAD_ERROR_TIMEOUT_MS);
     });
 
     // Handle model needs download - auto-download on startup
@@ -259,7 +265,7 @@ function App() {
       } catch (err) {
         console.error(`Failed to download ${modelSize} model:`, err);
         setError('Failed to download speech model. Please download manually in Settings.');
-        setTimeout(() => setError(null), 10000);
+        setTimeout(() => setError(null), MODEL_DOWNLOAD_ERROR_TIMEOUT_MS);
       } finally {
         setIsDownloadingModel(false);
       }
@@ -285,9 +291,9 @@ function App() {
 
   // Log when widget settings change
   const draggableValue = settings?.widget?.draggable ?? false;
-  const opacityValue = settings?.widget?.opacity ?? 1.0;
-  const hotkeyLabel = settings?.hotkey?.key || 'F6';
-  const hotkeyMode = settings?.hotkey?.mode || 'toggle';
+  const opacityValue = settings?.widget?.opacity ?? DEFAULT_WIDGET_OPACITY;
+  const hotkeyLabel = settings?.hotkey?.key || DEFAULT_HOTKEY_LABEL;
+  const hotkeyMode = settings?.hotkey?.mode || DEFAULT_HOTKEY_MODE;
   useEffect(() => {
     console.log(`[app] draggable prop changed to: ${draggableValue}`);
   }, [draggableValue]);

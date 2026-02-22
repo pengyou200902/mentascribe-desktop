@@ -23,6 +23,46 @@
   color-scheme: dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: transparent;
+
+  /* ---- Dictation Widget Variables ---- */
+  /* Pill dimensions */
+  --pill-collapsed-h: 10px;
+  --pill-collapsed-w: 52px;
+  --pill-collapsed-radius: 5px;
+  --pill-expanded-h: 36px;
+  --pill-expanded-w: 100px;
+  --pill-expanded-radius: 20px;
+
+  /* Pill colors */
+  --pill-collapsed-bg: rgba(28, 28, 28, 0.80);
+  --pill-expanded-bg: rgba(20, 20, 20, 0.95);
+  --pill-error-bg: rgba(30, 15, 15, 0.95);
+  --pill-init-bg: rgba(25, 22, 18, 0.95);
+
+  /* Tooltip */
+  --tooltip-bg: rgba(20, 20, 20, 0.95);
+  --tooltip-text: rgba(255, 255, 255, 0.5);
+  --tooltip-hotkey: #c026d3;
+  --tooltip-radius: 14px;
+  --tooltip-gap: 6px;
+
+  /* Bars & dots */
+  --bar-width: 3px;
+  --bar-color: rgba(255, 255, 255, 0.95);
+  --dot-size: 3px;
+  --idle-dot-color: rgba(255, 255, 255, 0.3);
+  --processing-dot-color: rgba(255, 255, 255, 0.5);
+
+  /* Initializing accent */
+  --init-accent: rgba(245, 181, 79, 0.7);
+  --init-accent-text: rgba(245, 181, 79, 0.8);
+  --init-border: rgba(245, 181, 79, 0.15);
+
+  /* Error */
+  --error-text-color: #f87171;
+
+  /* Animation */
+  --pill-transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 html, body, #root {
@@ -68,32 +108,32 @@ html, body, #root {
   cursor: default;
   user-select: none;
   -webkit-user-select: none;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all var(--pill-transition);
 }
 
 /* ---- Collapsed State: plain solid pill, no inner content ---- */
 .wispr-pill.collapsed {
-  height: 10px;
-  min-width: 52px;
-  background: rgba(28, 28, 28, 0.80);
-  border-radius: 5px;
+  height: var(--pill-collapsed-h);
+  min-width: var(--pill-collapsed-w);
+  background: var(--pill-collapsed-bg);
+  border-radius: var(--pill-collapsed-radius);
 }
 
 /* ---- Expanded State (hovered or active) ---- */
 .wispr-pill.expanded {
-  height: 36px;
-  min-width: 100px;
+  height: var(--pill-expanded-h);
+  min-width: var(--pill-expanded-w);
   padding: 0 16px;
-  background: rgba(20, 20, 20, 0.95);
-  border-radius: 20px;
+  background: var(--pill-expanded-bg);
+  border-radius: var(--pill-expanded-radius);
 }
 
 .wispr-pill.expanded.has-error {
-  height: 36px;
+  height: var(--pill-expanded-h);
   min-width: 120px;
   padding: 0 16px;
-  border-radius: 20px;
-  background: rgba(30, 15, 15, 0.95);
+  border-radius: var(--pill-expanded-radius);
+  background: var(--pill-error-bg);
 }
 
 .wispr-content {
@@ -105,20 +145,20 @@ html, body, #root {
 
 /* ---- Tooltip above pill (WisperFlow-style) ---- */
 .wispr-tooltip {
-  background: rgba(20, 20, 20, 0.95);
-  border-radius: 14px;
+  background: var(--tooltip-bg);
+  border-radius: var(--tooltip-radius);
   padding: 8px 16px;
-  margin-bottom: 6px;
+  margin-bottom: var(--tooltip-gap);
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--tooltip-text);
   white-space: nowrap;
   animation: wispr-tooltip-in 0.2s ease-out;
 }
 
 .wispr-hotkey {
-  color: #c026d3;
+  color: var(--tooltip-hotkey);
   font-weight: 700;
 }
 
@@ -142,9 +182,9 @@ html, body, #root {
 }
 
 .wispr-idle-dot {
-  width: 3px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.3);
+  width: var(--dot-size);
+  height: var(--dot-size);
+  background: var(--idle-dot-color);
   border-radius: 50%;
 }
 
@@ -158,9 +198,9 @@ html, body, #root {
 }
 
 .wispr-bar {
-  width: 3px;
+  width: var(--bar-width);
   min-height: 4px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--bar-color);
   border-radius: 2px;
   transition: height 0.06s ease-out;
 }
@@ -182,7 +222,7 @@ html, body, #root {
 .wispr-dot {
   width: 4px;
   height: 4px;
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--processing-dot-color);
   border-radius: 50%;
   animation: wispr-dot-pulse 1.2s ease-in-out infinite;
 }
@@ -224,7 +264,7 @@ html, body, #root {
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 12px;
   font-weight: 500;
-  color: #f87171;
+  color: var(--error-text-color);
   white-space: nowrap;
   max-width: 200px;
   overflow: hidden;
@@ -249,7 +289,7 @@ html, body, #root {
 .wispr-init-bar {
   width: 2px;
   border-radius: 1px;
-  background: rgba(245, 181, 79, 0.7);
+  background: var(--init-accent);
   animation: wispr-init-pulse 1.8s ease-in-out infinite;
 }
 
@@ -274,7 +314,7 @@ html, body, #root {
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 11px;
   font-weight: 500;
-  color: rgba(245, 181, 79, 0.8);
+  color: var(--init-accent-text);
   white-space: nowrap;
   animation: wispr-init-text-fade 2s ease-in-out infinite;
 }
@@ -290,12 +330,12 @@ html, body, #root {
 
 /* Pill modifier for initializing state */
 .wispr-pill.expanded.initializing {
-  height: 36px;
+  height: var(--pill-expanded-h);
   min-width: 130px;
   padding: 0 16px;
-  border-radius: 20px;
-  background: rgba(25, 22, 18, 0.95);
-  border: 1px solid rgba(245, 181, 79, 0.15);
+  border-radius: var(--pill-expanded-radius);
+  background: var(--pill-init-bg);
+  border: 1px solid var(--init-border);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -307,7 +347,7 @@ html, body, #root {
 @keyframes wispr-init-done {
   0% {
     min-width: 130px;
-    border-color: rgba(245, 181, 79, 0.15);
+    border-color: var(--init-border);
   }
   50% {
     border-color: rgba(74, 222, 128, 0.4);

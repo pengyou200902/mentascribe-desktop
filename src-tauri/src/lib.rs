@@ -114,7 +114,7 @@ fn apply_panel_opacity(app: &tauri::AppHandle, opacity: f64) {
     use objc::{msg_send, sel, sel_impl};
     use tauri_nspanel::ManagerExt;
 
-    let opacity = opacity.clamp(0.2, 1.0);
+    let opacity = opacity.clamp(MIN_PANEL_OPACITY, MAX_PANEL_OPACITY);
     if let Ok(panel) = app.get_webview_panel("dictation") {
         unsafe {
             let ns_panel: id = msg_send![&*panel, self];
@@ -194,7 +194,7 @@ fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
                 log::info!("Emitting audio level: {:.4}", level);
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            std::thread::sleep(std::time::Duration::from_millis(AUDIO_LEVEL_SLEEP_MS));
         }
         log::info!("Audio level emitter stopped");
     });
@@ -856,6 +856,13 @@ const DICTATION_WINDOW_WIDTH: f64 = 52.0;
 const DICTATION_WINDOW_HEIGHT: f64 = 10.0;
 /// Offset from the bottom of the screen to position just above the macOS dock
 const DOCK_OFFSET: f64 = 20.0;
+/// Extra padding around pill frame for cursor proximity detection
+const CURSOR_PROXIMITY_PADDING: f64 = 20.0;
+/// Opacity clamp range for the dictation panel
+const MIN_PANEL_OPACITY: f64 = 0.2;
+const MAX_PANEL_OPACITY: f64 = 1.0;
+/// Audio level emitter sleep interval
+const AUDIO_LEVEL_SLEEP_MS: u64 = 25;
 
 /// Position the dictation panel at bottom-center of the monitor containing the cursor.
 ///
@@ -1038,8 +1045,7 @@ fn is_cursor_over_pill(app: tauri::AppHandle) -> Result<bool, String> {
         let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
         let frame: NSRect = msg_send![&*panel, frame];
 
-        // Proximity padding — cursor doesn't need to be exactly on the pill
-        let padding = 20.0;
+        let padding = CURSOR_PROXIMITY_PADDING;
         let inside =
             mouse.x >= frame.origin.x - padding &&
             mouse.x <= frame.origin.x + frame.size.x + padding &&
