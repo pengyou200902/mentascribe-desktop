@@ -109,6 +109,7 @@ html, body, #root {
   cursor: default;
   user-select: none;
   -webkit-user-select: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   transition: all var(--pill-transition);
 }
 
@@ -155,6 +156,7 @@ html, body, #root {
   font-weight: 500;
   color: var(--tooltip-text);
   white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   animation: wispr-tooltip-in 0.2s ease-out;
 }
 
@@ -195,7 +197,7 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  height: 24px;
+  height: 25px;
 }
 
 .wispr-bar {
