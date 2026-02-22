@@ -286,7 +286,7 @@ function App() {
   // Log when widget settings change
   const draggableValue = settings?.widget?.draggable ?? false;
   const opacityValue = settings?.widget?.opacity ?? 1.0;
-  const hotkeyLabel = settings?.hotkey?.key || 'fn';
+  const hotkeyLabel = settings?.hotkey?.key || 'F6';
   const hotkeyMode = settings?.hotkey?.mode || 'toggle';
   useEffect(() => {
     console.log(`[app] draggable prop changed to: ${draggableValue}`);
