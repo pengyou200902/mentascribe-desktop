@@ -81,17 +81,10 @@ html, body, #root {
 
 /* ---- Expanded State (hovered or active) ---- */
 .wispr-pill.expanded {
-  height: 28px;
-  min-width: 80px;
-  padding: 0 14px;
-  background: rgba(20, 20, 20, 0.95);
-  border-radius: 16px;
-}
-
-.wispr-pill.expanded.active {
   height: 36px;
   min-width: 100px;
   padding: 0 16px;
+  background: rgba(20, 20, 20, 0.95);
   border-radius: 20px;
 }
 
