@@ -26,11 +26,11 @@
 
   /* ---- Dictation Widget Variables ---- */
   /* Pill dimensions */
-  --pill-collapsed-h: 10px;
-  --pill-collapsed-w: 52px;
+  --pill-collapsed-h: 7px;
+  --pill-collapsed-w: 40px;
   --pill-collapsed-radius: 5px;
-  --pill-expanded-h: 36px;
-  --pill-expanded-w: 100px;
+  --pill-expanded-h: 26px;
+  --pill-expanded-w: 75px;
   --pill-expanded-radius: 20px;
 
   /* Pill colors */
@@ -42,9 +42,10 @@
   /* Tooltip */
   --tooltip-bg: rgba(20, 20, 20, 0.95);
   --tooltip-text: rgba(255, 255, 255, 0.5);
-  --tooltip-hotkey: #c026d3;
+  --tooltip-hotkey: #ffffff;
+  /*--tooltip-hotkey: #c026d3;*/
   --tooltip-radius: 14px;
-  --tooltip-gap: 6px;
+  --tooltip-gap: 4px;
 
   /* Bars & dots */
   --bar-width: 3px;
@@ -62,7 +63,7 @@
   --error-text-color: #f87171;
 
   /* Animation */
-  --pill-transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --pill-transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 html, body, #root {
@@ -178,7 +179,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .wispr-idle-dot {
@@ -193,7 +194,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
   height: 24px;
 }
 
