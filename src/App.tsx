@@ -287,6 +287,7 @@ function App() {
   const draggableValue = settings?.widget?.draggable ?? false;
   const opacityValue = settings?.widget?.opacity ?? 1.0;
   const hotkeyLabel = settings?.hotkey?.key || 'fn';
+  const hotkeyMode = settings?.hotkey?.mode || 'toggle';
   useEffect(() => {
     console.log(`[app] draggable prop changed to: ${draggableValue}`);
   }, [draggableValue]);
@@ -304,6 +305,7 @@ function App() {
         draggable={draggableValue}
         opacity={opacityValue}
         hotkeyLabel={hotkeyLabel}
+        hotkeyMode={hotkeyMode}
       />
     </div>
   );

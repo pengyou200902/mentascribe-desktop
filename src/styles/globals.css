@@ -112,14 +112,14 @@ html, body, #root {
 
 /* ---- Tooltip above pill (WisperFlow-style) ---- */
 .wispr-tooltip {
-  background: #f8f4ec;
+  background: rgba(20, 20, 20, 0.95);
   border-radius: 14px;
   padding: 8px 16px;
   margin-bottom: 6px;
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13px;
   font-weight: 500;
-  color: #1c1917;
+  color: rgba(255, 255, 255, 0.5);
   white-space: nowrap;
   animation: wispr-tooltip-in 0.2s ease-out;
 }

@@ -11,6 +11,7 @@ interface DictationBarProps {
   draggable?: boolean;
   opacity?: number;
   hotkeyLabel?: string;
+  hotkeyMode?: string;
 }
 
 export const DictationBar: FC<DictationBarProps> = ({
@@ -22,6 +23,7 @@ export const DictationBar: FC<DictationBarProps> = ({
   draggable = false,
   opacity = 1.0,
   hotkeyLabel = 'fn',
+  hotkeyMode = 'toggle',
 }) => {
   const audioLevelRef = useRef(audioLevel);
   const [waveformBars, setWaveformBars] = useState<number[]>(Array(9).fill(0.3));
@@ -227,7 +229,9 @@ export const DictationBar: FC<DictationBarProps> = ({
     >
       {isIdle && (
         <div className="wispr-tooltip">
-          Click or hold <span className="wispr-hotkey">{hotkeyLabel}</span> to start dictating
+          {hotkeyMode === 'hold'
+            ? <>Hold <span className="wispr-hotkey">{hotkeyLabel}</span> to start dictating</>
+            : <>Press <span className="wispr-hotkey">{hotkeyLabel}</span> to start dictating</>}
         </div>
       )}
       <div
