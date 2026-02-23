@@ -26,6 +26,12 @@ pub struct VoxStream {
 // ---------------------------------------------------------------------------
 
 extern "C" {
+    // Metal GPU initialization (must be called before vox_load on Apple Silicon)
+    #[cfg(target_os = "macos")]
+    pub fn vox_metal_init() -> c_int;
+    #[cfg(target_os = "macos")]
+    pub fn vox_metal_available() -> c_int;
+
     // Lifecycle
     pub fn vox_load(model_dir: *const c_char) -> *mut VoxCtx;
     pub fn vox_free(ctx: *mut VoxCtx);
@@ -37,6 +43,7 @@ extern "C" {
     pub fn vox_stream_finish(s: *mut VoxStream) -> c_int;
     pub fn vox_stream_get(s: *mut VoxStream, out_tokens: *mut *const c_char, max: c_int) -> c_int;
     pub fn vox_stream_flush(s: *mut VoxStream) -> c_int;
+    pub fn vox_stream_force_encode(s: *mut VoxStream) -> c_int;
     pub fn vox_stream_set_continuous(s: *mut VoxStream, enable: c_int);
     pub fn vox_set_processing_interval(s: *mut VoxStream, seconds: c_float);
     pub fn vox_stream_free(s: *mut VoxStream);
@@ -68,6 +75,20 @@ impl VoxtralContext {
     /// Load a voxtral model from the given directory.
     /// The directory must contain `consolidated.safetensors`, `tekken.json`, and `params.json`.
     pub fn load(model_dir: &str) -> Result<Self, String> {
+        // Initialize Metal GPU before loading the model.
+        // This must be called once before vox_load() so the library uses GPU
+        // acceleration instead of falling back to CPU-only BLAS.
+        #[cfg(target_os = "macos")]
+        {
+            let metal_ok = unsafe { vox_metal_init() };
+            let metal_avail = unsafe { vox_metal_available() };
+            eprintln!(
+                "[voxtral] Metal init: {} (available: {})",
+                if metal_ok != 0 { "OK" } else { "FAILED" },
+                metal_avail != 0
+            );
+        }
+
         let c_path = CString::new(model_dir)
             .map_err(|e| format!("Invalid model path: {}", e))?;
         let ptr = unsafe { vox_load(c_path.as_ptr()) };
@@ -169,11 +190,22 @@ impl VoxtralStream {
         tokens
     }
 
-    /// Force the encoder to process whatever audio is buffered.
+    /// Force the encoder to process whatever audio is buffered (with right-padding).
     pub fn flush(&self) -> Result<(), String> {
         let ret = unsafe { vox_stream_flush(self.ptr) };
         if ret < 0 {
             return Err("vox_stream_flush failed".to_string());
+        }
+        Ok(())
+    }
+
+    /// Force the encoder to process accumulated mel frames WITHOUT adding
+    /// right-padding silence. Cheaper than flush() — used periodically during
+    /// recording to keep the encoder/decoder current.
+    pub fn force_encode(&self) -> Result<(), String> {
+        let ret = unsafe { vox_stream_force_encode(self.ptr) };
+        if ret < 0 {
+            return Err("vox_stream_force_encode failed".to_string());
         }
         Ok(())
     }
