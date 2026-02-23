@@ -365,7 +365,7 @@ void vox_free(vox_ctx_t *ctx) {
 #define TOKEN_TEXT_MIN     1000
 
 #define RAW_AUDIO_LENGTH_PER_TOK 1280
-#define OFFLINE_STREAMING_BUFFER_TOKENS 10
+#define OFFLINE_STREAMING_BUFFER_TOKENS 3
 
 /* First chunk minimum mel frames (enough for 39 prompt adapter tokens) */
 #define STREAM_FIRST_CHUNK_MIN_MEL  312
@@ -1606,6 +1606,16 @@ int vox_stream_flush(vox_stream_t *s) {
     }
 
     /* Force encoder to process all buffered mel, then run decoder */
+    int saved = s->min_new_mel;
+    s->min_new_mel = 1;
+    stream_run_encoder(s);
+    stream_run_decoder(s);
+    s->min_new_mel = saved;
+    return 0;
+}
+
+int vox_stream_force_encode(vox_stream_t *s) {
+    if (!s || s->finished) return -1;
     int saved = s->min_new_mel;
     s->min_new_mel = 1;
     stream_run_encoder(s);
