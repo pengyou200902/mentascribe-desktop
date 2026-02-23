@@ -10,6 +10,9 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #include "voxtral_metal.h"
 #include "voxtral_shaders_source.h"
+#ifdef USE_PRECOMPILED_METALLIB
+#include "voxtral_metallib_source.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -429,17 +432,41 @@ static int init_shaders(void) {
     @autoreleasepool {
         NSError *error = nil;
 
-        NSString *shaderSource = [[NSString alloc]
-            initWithBytes:voxtral_shaders_metal
-                   length:voxtral_shaders_metal_len
-                 encoding:NSUTF8StringEncoding];
+#ifdef USE_PRECOMPILED_METALLIB
+        /* Try loading precompiled metallib first (saves ~114ms) */
+        if (voxtral_precompiled_metallib_len > 0) {
+            dispatch_data_t data = dispatch_data_create(
+                voxtral_precompiled_metallib,
+                voxtral_precompiled_metallib_len,
+                NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+            g_shader_library = [g_device newLibraryWithData:data error:&error];
+            if (g_shader_library) {
+                if (vox_verbose >= 1)
+                    fprintf(stderr, "Metal shaders: loaded precompiled metallib (%u bytes)\n",
+                            voxtral_precompiled_metallib_len);
+            } else {
+                fprintf(stderr, "Metal shaders: precompiled load failed (%s), falling back to runtime compilation\n",
+                        [[error localizedDescription] UTF8String]);
+                error = nil;
+            }
+        }
+#endif
 
-        MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
-        options.mathMode = MTLMathModeFast;
+        if (!g_shader_library) {
+            /* Runtime compilation fallback */
+            NSString *shaderSource = [[NSString alloc]
+                initWithBytes:voxtral_shaders_metal
+                       length:voxtral_shaders_metal_len
+                     encoding:NSUTF8StringEncoding];
 
-        g_shader_library = [g_device newLibraryWithSource:shaderSource
-                                                  options:options
-                                                    error:&error];
+            MTLCompileOptions *options = [[MTLCompileOptions alloc] init];
+            options.mathMode = MTLMathModeFast;
+
+            g_shader_library = [g_device newLibraryWithSource:shaderSource
+                                                      options:options
+                                                        error:&error];
+        }
+
         if (!g_shader_library) {
             fprintf(stderr, "Metal shaders: compilation failed: %s\n",
                     [[error localizedDescription] UTF8String]);
