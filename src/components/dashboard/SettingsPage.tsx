@@ -170,6 +170,13 @@ interface MetalStatus {
   supported: boolean;
 }
 
+interface VoxtralStatus {
+  compiled: boolean;
+  metal: boolean;
+  model_downloaded: boolean;
+  model_loaded: boolean;
+}
+
 // Section Component
 interface SettingsSectionProps {
   icon: React.ReactNode;
@@ -955,11 +962,15 @@ export function SettingsPage() {
   const [downloadingCoreml, setDownloadingCoreml] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [voxtralStatus, setVoxtralStatus] = useState<VoxtralStatus | null>(null);
+  const [voxtralModels, setVoxtralModels] = useState<ModelInfo[]>([]);
+  const [downloadingVoxtral, setDownloadingVoxtral] = useState(false);
 
   useEffect(() => {
     loadModels();
     loadCoremlStatus();
     loadMetalStatus();
+    loadVoxtralStatus();
   }, []);
 
   // Listen for download progress events from the backend
@@ -1001,6 +1012,48 @@ export function SettingsPage() {
     } catch (error) {
       console.error('Failed to load models:', error);
     }
+  }
+
+  async function loadVoxtralStatus() {
+    try {
+      const status = await invoke<VoxtralStatus>('get_voxtral_status');
+      setVoxtralStatus(status);
+      if (status.compiled) {
+        const vModels = await invoke<ModelInfo[]>('get_voxtral_models');
+        setVoxtralModels(vModels);
+      }
+    } catch (error) {
+      console.error('Failed to load Voxtral status:', error);
+    }
+  }
+
+  async function downloadVoxtralModel() {
+    setDownloadingVoxtral(true);
+    setDownloadProgress((prev) => ({ ...prev, ['voxtral:voxtral-mini-4b']: 0 }));
+    try {
+      await invoke('download_voxtral_model');
+      await loadVoxtralStatus();
+    } catch (error) {
+      console.error('Failed to download Voxtral model:', error);
+    }
+    setDownloadingVoxtral(false);
+    setDownloadProgress((prev) => {
+      const next = { ...prev };
+      delete next['voxtral:voxtral-mini-4b'];
+      return next;
+    });
+  }
+
+  async function handleDeleteVoxtralModel() {
+    if (deleting) return;
+    setDeleting('voxtral:voxtral-mini-4b');
+    try {
+      await invoke('delete_voxtral_model');
+      await loadVoxtralStatus();
+    } catch (error) {
+      console.error('Failed to delete Voxtral model:', error);
+    }
+    setDeleting(null);
   }
 
   async function downloadModel(modelId: string) {
@@ -1169,6 +1222,50 @@ export function SettingsPage() {
             title="Transcription"
             description="Speech recognition settings"
           >
+            {/* Engine Selector */}
+            {voxtralStatus?.compiled && (
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
+                  Engine
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'whisper', label: 'Whisper', description: 'OpenAI Whisper — battle-tested, multilingual' },
+                    { value: 'voxtral', label: 'Voxtral', description: 'Mistral 4B Realtime — native streaming, Metal GPU' },
+                  ].map((engine) => {
+                    const isSelected = (settings.transcription.engine || 'whisper') === engine.value;
+                    return (
+                      <button
+                        key={engine.value}
+                        onClick={() => handleChange('transcription', 'engine', engine.value)}
+                        className={`
+                          p-3 rounded-xl border text-left transition-all duration-200
+                          ${isSelected
+                            ? 'border-amber-500 dark:border-amber-400 bg-amber-50 dark:bg-amber-900/20'
+                            : 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50 hover:border-stone-300 dark:hover:border-stone-600'
+                          }
+                        `}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center
+                            ${isSelected ? 'border-amber-500 dark:border-amber-400' : 'border-stone-300 dark:border-stone-600'}
+                          `}>
+                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />}
+                          </div>
+                          <span className={`text-sm font-medium ${isSelected ? 'text-stone-900 dark:text-stone-100' : 'text-stone-600 dark:text-stone-400'}`}>
+                            {engine.label}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1 ml-5">
+                          {engine.description}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <Dropdown
               label="Language"
               value={settings.transcription.language || 'auto'}
@@ -1188,6 +1285,102 @@ export function SettingsPage() {
               ]}
             />
 
+            {/* Voxtral Model Management */}
+            {(settings.transcription.engine === 'voxtral') && voxtralStatus?.compiled && (
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
+                  Voxtral Model
+                </label>
+                {voxtralModels.map((model) => {
+                  const voxProgress = downloadProgress['voxtral:voxtral-mini-4b'];
+                  return (
+                    <div
+                      key={model.id}
+                      className="flex items-center justify-between p-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/50"
+                    >
+                      <div>
+                        <span className="text-sm font-medium text-stone-900 dark:text-stone-100">
+                          {model.name}
+                        </span>
+                        <span className="text-xs text-stone-500 dark:text-stone-400 ml-2">
+                          ({formatSize(model.size_mb)})
+                        </span>
+                        {voxtralStatus.metal && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 ml-2">
+                            Metal GPU
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {model.downloaded ? (
+                          <>
+                            <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-lg">
+                              <CheckIcon />
+                              Ready
+                            </span>
+                            <button
+                              onClick={() => handleDeleteVoxtralModel()}
+                              disabled={deleting === 'voxtral:voxtral-mini-4b'}
+                              className="p-1.5 rounded-lg text-stone-400 dark:text-stone-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                              title="Delete Voxtral model"
+                            >
+                              <TrashIcon />
+                            </button>
+                          </>
+                        ) : downloadingVoxtral ? (
+                          <span className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            {voxProgress != null ? `${Math.round(voxProgress)}%` : 'Downloading...'}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => downloadVoxtralModel()}
+                            className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
+                          >
+                            <DownloadIcon />
+                            Download
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Voxtral Delay Slider */}
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <span className="text-sm font-medium text-stone-700 dark:text-stone-300">Streaming Latency</span>
+                      <p className="text-xs text-stone-500 dark:text-stone-400">
+                        Lower = faster response, higher = more accurate
+                      </p>
+                    </div>
+                    <span className="text-sm font-medium text-stone-600 dark:text-stone-400 tabular-nums">
+                      {settings.transcription.voxtral_delay_ms ?? 480}ms
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={80}
+                    max={2400}
+                    step={80}
+                    value={settings.transcription.voxtral_delay_ms ?? 480}
+                    onChange={(e) => handleChange('transcription', 'voxtral_delay_ms', parseInt(e.target.value))}
+                    className="w-full h-2 bg-stone-200 dark:bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-stone-400 dark:text-stone-500 mt-1">
+                    <span>80ms (fastest)</span>
+                    <span>2400ms (most accurate)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Whisper Model List (only when Whisper engine is selected) */}
+            {(settings.transcription.engine || 'whisper') === 'whisper' && (
             <div>
               <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-3">
                 Speech Model
@@ -1295,9 +1488,10 @@ export function SettingsPage() {
                 })}
               </div>
             </div>
+            )}
 
-            {/* CoreML Acceleration */}
-            {coremlStatus?.supported && (
+            {/* CoreML Acceleration (Whisper engine only) */}
+            {(settings.transcription.engine || 'whisper') === 'whisper' && coremlStatus?.supported && (
               <div className="pt-4 border-t border-stone-100 dark:border-stone-700">
                 <div className="flex items-center justify-between mb-2">
                   <div>
@@ -1447,8 +1641,8 @@ export function SettingsPage() {
               </div>
             )}
 
-            {/* Metal GPU Acceleration */}
-            {metalStatus?.supported && (
+            {/* Metal GPU Acceleration (Whisper engine only) */}
+            {(settings.transcription.engine || 'whisper') === 'whisper' && metalStatus?.supported && (
               <div className="pt-4 border-t border-stone-100 dark:border-stone-700">
                 <div className="flex items-center justify-between">
                   <div>

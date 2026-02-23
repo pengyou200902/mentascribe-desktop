@@ -83,9 +83,14 @@ function App() {
       // Reset ref on error
       isRecordingRef.current = false;
       console.error('Failed to start recording:', error);
-      // Show brief error so user gets feedback (clears quickly)
-      setError('Mic busy — try again');
-      setTimeout(() => setError(null), MIC_ERROR_TIMEOUT_MS);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('Model not found') || errorMsg.includes('not downloaded') || errorMsg.includes('not loaded')) {
+        setError('Model not loaded — download in Settings');
+        setTimeout(() => setError(null), ERROR_TIMEOUT_MS);
+      } else {
+        setError('Mic busy — try again');
+        setTimeout(() => setError(null), MIC_ERROR_TIMEOUT_MS);
+      }
     }
   }, []);
 

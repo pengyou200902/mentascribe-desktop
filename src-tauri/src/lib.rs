@@ -160,21 +160,41 @@ fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
     }
     eprintln!("[recording] Audio capture started successfully");
 
-    // Start VAD-triggered streaming transcription in background.
-    // This transcribes completed utterances during recording so only
-    // the final partial utterance needs processing on stop.
+    // Start streaming transcription in background.
+    // Dispatches to Voxtral (native streaming) or Whisper (VAD-triggered) based on engine setting.
     {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        let model_size = settings
-            .transcription
-            .model_size
-            .clone()
-            .unwrap_or_else(|| "small".to_string());
-        let language = settings.transcription.language.clone();
-        transcription::whisper::start_streaming(transcription::whisper::StreamingConfig {
-            model_size,
-            language,
-        });
+
+        if is_voxtral_engine(&settings) {
+            #[cfg(feature = "voxtral")]
+            {
+                let delay_ms = settings.transcription.voxtral_delay_ms.unwrap_or(480);
+                transcription::voxtral::start_streaming(transcription::voxtral::StreamingConfig {
+                    delay_ms,
+                }).map_err(|e| {
+                    eprintln!("[recording] ERROR: Voxtral streaming start failed: {}", e);
+                    // Reset recording state since we failed
+                    *is_recording = false;
+                    e.to_string()
+                })?;
+            }
+            #[cfg(not(feature = "voxtral"))]
+            {
+                *is_recording = false;
+                return Err("Voxtral engine not available (not compiled)".to_string());
+            }
+        } else {
+            let model_size = settings
+                .transcription
+                .model_size
+                .clone()
+                .unwrap_or_else(|| "small".to_string());
+            let language = settings.transcription.language.clone();
+            transcription::whisper::start_streaming(transcription::whisper::StreamingConfig {
+                model_size,
+                language,
+            });
+        }
     }
 
     // Start audio level emitter
@@ -227,10 +247,24 @@ async fn stop_recording(
         return Err("Not recording".to_string());
     }
 
-    // Stop VAD streaming monitor first (ensures all in-progress transcriptions complete
+    // Stop streaming monitor first (ensures all in-progress transcriptions complete
     // before we stop capture). Returns accumulated results and consumed sample count.
-    eprintln!("[recording] Stopping VAD streaming monitor...");
-    let (streaming_results, consumed_samples) = transcription::whisper::stop_streaming();
+    let use_voxtral = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        is_voxtral_engine(&settings)
+    };
+
+    eprintln!("[recording] Stopping streaming monitor (engine={})...", if use_voxtral { "voxtral" } else { "whisper" });
+
+    let (streaming_results, consumed_samples) = if use_voxtral {
+        #[cfg(feature = "voxtral")]
+        { transcription::voxtral::stop_streaming() }
+        #[cfg(not(feature = "voxtral"))]
+        { (Vec::new(), 0usize) }
+    } else {
+        transcription::whisper::stop_streaming()
+    };
+
     let streaming_prefix = if streaming_results.is_empty() {
         eprintln!("[recording] No streaming results (no completed utterances detected)");
         None
@@ -295,14 +329,32 @@ async fn stop_recording(
     // Calculate duration before moving audio_data into transcribe
     let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
 
-    // Transcribe remaining tail audio and combine with streaming prefix
+    // Transcribe remaining tail audio and combine with streaming prefix.
+    // Voxtral streaming consumes ALL audio incrementally (consumed_samples == usize::MAX),
+    // so the tail will be empty and we just return the streaming prefix.
     eprintln!("[recording] Starting tail transcription...");
-    let raw_text = transcription::whisper::transcribe(audio_data, &settings, streaming_prefix)
-        .await
-        .map_err(|e| {
-            eprintln!("[recording] ERROR: Transcription failed: {}", e);
-            e.to_string()
-        })?;
+    let raw_text = if use_voxtral {
+        #[cfg(feature = "voxtral")]
+        {
+            transcription::voxtral::transcribe(audio_data, &settings, streaming_prefix)
+                .await
+                .map_err(|e| {
+                    eprintln!("[recording] ERROR: Voxtral transcription failed: {}", e);
+                    e.to_string()
+                })?
+        }
+        #[cfg(not(feature = "voxtral"))]
+        {
+            streaming_prefix.unwrap_or_default()
+        }
+    } else {
+        transcription::whisper::transcribe(audio_data, &settings, streaming_prefix)
+            .await
+            .map_err(|e| {
+                eprintln!("[recording] ERROR: Transcription failed: {}", e);
+                e.to_string()
+            })?
+    };
     eprintln!(
         "[recording] Transcription complete: '{}' ({} chars)",
         if raw_text.len() > 100 {
@@ -376,13 +428,14 @@ fn update_settings(
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (old_hotkey, old_draggable, old_opacity, old_model_size) = {
+    let (old_hotkey, old_draggable, old_opacity, old_model_size, old_engine) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         (
             settings.hotkey.key.clone(),
             settings.widget.draggable,
             settings.widget.opacity,
             settings.transcription.model_size.clone(),
+            settings.transcription.engine.clone(),
         )
     };
 
@@ -423,9 +476,55 @@ fn update_settings(
     // Notify all windows (especially dictation) that settings changed
     app.emit("settings-changed", &new_settings).ok();
 
-    // Preload new model in background if model_size changed
+    // Handle engine switching — unload old engine to free GPU memory
+    let new_engine = new_settings.transcription.engine.clone();
+    if old_engine != new_engine {
+        let switching_to_voxtral = new_engine.as_deref() == Some("voxtral");
+        log::info!("Engine changed: {:?} -> {:?}", old_engine, new_engine);
+
+        if switching_to_voxtral {
+            // Unload Whisper to free GPU memory, preload Voxtral
+            #[cfg(feature = "voxtral")]
+            {
+                // Note: We don't have a whisper::unload_model() — the cache is replaced on next preload
+                if transcription::voxtral::is_model_downloaded() {
+                    let preload_app = app.clone();
+                    std::thread::spawn(move || {
+                        log::info!("Switching to Voxtral, preloading...");
+                        preload_app.emit("model-preload-start", "voxtral-mini-4b").ok();
+                        let start = std::time::Instant::now();
+                        match transcription::voxtral::preload_model() {
+                            Ok(()) => {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                log::info!("Voxtral preloaded in {:.2}s", elapsed);
+                                preload_app.emit("model-preload-complete", serde_json::json!({
+                                    "model": "voxtral-mini-4b",
+                                    "elapsed_secs": elapsed,
+                                })).ok();
+                            }
+                            Err(e) => {
+                                log::error!("Failed to preload Voxtral: {}", e);
+                                preload_app.emit("model-preload-error", serde_json::json!({
+                                    "model": "voxtral-mini-4b",
+                                    "error": e.to_string(),
+                                })).ok();
+                            }
+                        }
+                    });
+                }
+            }
+        } else {
+            // Switching away from Voxtral — unload it, preload Whisper
+            #[cfg(feature = "voxtral")]
+            {
+                transcription::voxtral::unload_model();
+            }
+        }
+    }
+
+    // Preload new Whisper model in background if model_size changed (and using Whisper engine)
     let new_model_size = new_settings.transcription.model_size.clone();
-    if old_model_size != new_model_size {
+    if old_model_size != new_model_size && !is_voxtral_engine(&new_settings) {
         if let Some(model_size) = new_model_size {
             let preload_app = app.clone();
             std::thread::spawn(move || {
@@ -599,6 +698,92 @@ fn update_dictionary_entry(
 #[tauri::command]
 fn remove_dictionary_entry(id: String) -> Result<bool, String> {
     dictionary::remove_entry(id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Voxtral IPC commands (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Check if the current engine setting is "voxtral" AND the feature is compiled in.
+fn is_voxtral_engine(settings: &settings::UserSettings) -> bool {
+    #[cfg(feature = "voxtral")]
+    {
+        settings.transcription.engine.as_deref() == Some("voxtral")
+    }
+    #[cfg(not(feature = "voxtral"))]
+    {
+        let _ = settings;
+        false
+    }
+}
+
+#[tauri::command]
+fn get_voxtral_status() -> transcription::VoxtralStatus {
+    #[cfg(feature = "voxtral")]
+    {
+        let s = transcription::voxtral::get_status();
+        transcription::VoxtralStatus {
+            compiled: s.compiled,
+            metal: s.metal,
+            model_downloaded: s.model_downloaded,
+            model_loaded: s.model_loaded,
+        }
+    }
+    #[cfg(not(feature = "voxtral"))]
+    {
+        transcription::VoxtralStatus::default()
+    }
+}
+
+#[tauri::command]
+fn get_voxtral_models() -> Vec<transcription::ModelInfo> {
+    #[cfg(feature = "voxtral")]
+    {
+        transcription::voxtral::get_available_models()
+    }
+    #[cfg(not(feature = "voxtral"))]
+    {
+        Vec::new()
+    }
+}
+
+#[tauri::command]
+async fn download_voxtral_model(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(feature = "voxtral")]
+    {
+        let app_clone = app.clone();
+        transcription::voxtral::download_model(move |percent| {
+            app_clone
+                .emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "model_type": "voxtral",
+                        "model_id": "voxtral-mini-4b",
+                        "percent": percent,
+                    }),
+                )
+                .ok();
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "voxtral"))]
+    {
+        let _ = app;
+        Err("Voxtral feature not compiled".to_string())
+    }
+}
+
+#[tauri::command]
+fn delete_voxtral_model() -> Result<(), String> {
+    #[cfg(feature = "voxtral")]
+    {
+        transcription::voxtral::delete_model().map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "voxtral"))]
+    {
+        Err("Voxtral feature not compiled".to_string())
+    }
 }
 
 /// Frontend debug log forwarding — prints to terminal so we can see drag events
@@ -1238,79 +1423,113 @@ pub fn run() {
                 }
             }
 
-            // Check if the configured model is downloaded
-            let models = transcription::whisper::get_available_models();
-            let configured_model = loaded_settings
-                .transcription
-                .model_size
-                .as_deref()
-                .unwrap_or("small");
+            // Check which engine is configured and preload accordingly
+            let use_voxtral_engine = is_voxtral_engine(&loaded_settings);
 
-            let model_downloaded = models
-                .iter()
-                .find(|m| m.id == configured_model)
-                .map(|m| m.downloaded)
-                .unwrap_or(false);
-
-            if !model_downloaded {
-                log::info!("Configured model '{}' not found, emitting model-needs-download event", configured_model);
-                app_handle.emit("model-needs-download", configured_model).ok();
-            }
-
-            // Preload Whisper model in background so first transcription is fast
-            if model_downloaded {
-                let preload_model_size = configured_model.to_string();
-                let preload_app_handle = app_handle.clone();
-                std::thread::spawn(move || {
-                    log::info!(
-                        "Background preload: starting for model '{}'",
-                        preload_model_size
-                    );
-
-                    // Download VAD model if not present (~2MB, fast)
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build();
-                    if let Ok(rt) = rt {
-                        if let Err(e) = rt.block_on(transcription::whisper::ensure_vad_model()) {
-                            log::warn!("Failed to download VAD model: {} (VAD pre-filtering will be skipped)", e);
-                        }
+            if use_voxtral_engine {
+                // Preload Voxtral model
+                #[cfg(feature = "voxtral")]
+                {
+                    if transcription::voxtral::is_model_downloaded() {
+                        let preload_app_handle = app_handle.clone();
+                        std::thread::spawn(move || {
+                            log::info!("Background preload: starting for Voxtral model");
+                            preload_app_handle.emit("model-preload-start", "voxtral-mini-4b").ok();
+                            let start = std::time::Instant::now();
+                            match transcription::voxtral::preload_model() {
+                                Ok(()) => {
+                                    let elapsed = start.elapsed().as_secs_f64();
+                                    log::info!("Background preload: Voxtral ready in {:.2}s", elapsed);
+                                    preload_app_handle.emit("model-preload-complete", serde_json::json!({
+                                        "model": "voxtral-mini-4b",
+                                        "elapsed_secs": elapsed,
+                                    })).ok();
+                                }
+                                Err(e) => {
+                                    log::error!("Background preload: Voxtral failed: {}", e);
+                                    preload_app_handle.emit("model-preload-error", serde_json::json!({
+                                        "model": "voxtral-mini-4b",
+                                        "error": e.to_string(),
+                                    })).ok();
+                                }
+                            }
+                        });
+                    } else {
+                        log::info!("Voxtral model not downloaded, emitting model-needs-download");
+                        app_handle.emit("model-needs-download", "voxtral-mini-4b").ok();
                     }
+                }
+            } else {
+                // Preload Whisper model (existing behavior)
+                let models = transcription::whisper::get_available_models();
+                let configured_model = loaded_settings
+                    .transcription
+                    .model_size
+                    .as_deref()
+                    .unwrap_or("small");
 
-                    // Emit preload-start event to all windows
-                    preload_app_handle.emit("model-preload-start", &preload_model_size).ok();
+                let model_downloaded = models
+                    .iter()
+                    .find(|m| m.id == configured_model)
+                    .map(|m| m.downloaded)
+                    .unwrap_or(false);
 
-                    let start = std::time::Instant::now();
-                    match transcription::whisper::preload_model(&preload_model_size) {
-                        Ok(()) => {
-                            let elapsed = start.elapsed().as_secs_f64();
-                            log::info!(
-                                "Background preload: model '{}' ready in {:.2}s",
-                                preload_model_size,
-                                elapsed
-                            );
-                            // Emit preload-complete event to all windows
-                            preload_app_handle.emit("model-preload-complete", serde_json::json!({
-                                "model": &preload_model_size,
-                                "elapsed_secs": elapsed,
-                            })).ok();
+                if !model_downloaded {
+                    log::info!("Configured model '{}' not found, emitting model-needs-download event", configured_model);
+                    app_handle.emit("model-needs-download", configured_model).ok();
+                }
+
+                if model_downloaded {
+                    let preload_model_size = configured_model.to_string();
+                    let preload_app_handle = app_handle.clone();
+                    std::thread::spawn(move || {
+                        log::info!(
+                            "Background preload: starting for model '{}'",
+                            preload_model_size
+                        );
+
+                        // Download VAD model if not present (~2MB, fast)
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build();
+                        if let Ok(rt) = rt {
+                            if let Err(e) = rt.block_on(transcription::whisper::ensure_vad_model()) {
+                                log::warn!("Failed to download VAD model: {} (VAD pre-filtering will be skipped)", e);
+                            }
                         }
-                        Err(e) => {
-                            let elapsed = start.elapsed().as_secs_f64();
-                            log::error!(
-                                "Background preload: failed for model '{}' after {:.2}s: {}",
-                                preload_model_size,
-                                elapsed,
-                                e
-                            );
-                            // Emit preload-error event to all windows
-                            preload_app_handle.emit("model-preload-error", serde_json::json!({
-                                "model": &preload_model_size,
-                                "error": e.to_string(),
-                            })).ok();
+
+                        preload_app_handle.emit("model-preload-start", &preload_model_size).ok();
+
+                        let start = std::time::Instant::now();
+                        match transcription::whisper::preload_model(&preload_model_size) {
+                            Ok(()) => {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                log::info!(
+                                    "Background preload: model '{}' ready in {:.2}s",
+                                    preload_model_size,
+                                    elapsed
+                                );
+                                preload_app_handle.emit("model-preload-complete", serde_json::json!({
+                                    "model": &preload_model_size,
+                                    "elapsed_secs": elapsed,
+                                })).ok();
+                            }
+                            Err(e) => {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                log::error!(
+                                    "Background preload: failed for model '{}' after {:.2}s: {}",
+                                    preload_model_size,
+                                    elapsed,
+                                    e
+                                );
+                                preload_app_handle.emit("model-preload-error", serde_json::json!({
+                                    "model": &preload_model_size,
+                                    "error": e.to_string(),
+                                })).ok();
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
 
             // Show dictation window and convert to NSPanel
@@ -1414,6 +1633,11 @@ pub fn run() {
             start_native_drag,
             resize_pill,
             is_cursor_over_pill,
+            // Voxtral
+            get_voxtral_status,
+            get_voxtral_models,
+            download_voxtral_model,
+            delete_voxtral_model,
             // Debug
             frontend_log,
         ])

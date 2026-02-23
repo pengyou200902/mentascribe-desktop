@@ -19,6 +19,12 @@ pub struct TranscriptionSettings {
     /// CoreML acceleration: None = auto-detect (enabled if supported), Some(true/false) = override
     #[serde(default)]
     pub use_coreml: Option<bool>,
+    /// Transcription engine: None or "whisper" = Whisper (default), "voxtral" = Voxtral
+    #[serde(default)]
+    pub engine: Option<String>,
+    /// Voxtral transcription delay in ms (80-2400, default 480)
+    #[serde(default)]
+    pub voxtral_delay_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

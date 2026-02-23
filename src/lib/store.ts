@@ -7,6 +7,8 @@ export interface TranscriptionSettings {
   model_size?: string;
   cloud_provider?: string;
   use_coreml?: boolean | null;
+  engine?: string;            // "whisper" | "voxtral" (default: "whisper")
+  voxtral_delay_ms?: number;  // 80-2400, default 480
 }
 
 export interface CleanupSettings {
