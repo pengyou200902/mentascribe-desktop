@@ -9,7 +9,7 @@ use crate::settings::UserSettings;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -344,6 +344,11 @@ static VOXTRAL_STREAMING_RESULTS: Lazy<Mutex<Vec<String>>> =
 /// Signal to stop the streaming loop.
 static VOXTRAL_STREAMING_STOP: AtomicBool = AtomicBool::new(false);
 
+/// WHISPER_BUFFER length at the moment the user pressed stop.
+/// The streaming thread must not feed audio beyond this point
+/// (capture continues running while we process).
+static VOXTRAL_STOP_BUFFER_LEN: AtomicUsize = AtomicUsize::new(0);
+
 /// Handle for the streaming thread.
 static VOXTRAL_STREAM_HANDLE: Lazy<Mutex<Option<std::thread::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));
@@ -389,38 +394,40 @@ pub fn start_streaming(config: StreamingConfig) -> Result<(), VoxtralError> {
 /// When streaming was active: consumed_samples is usize::MAX (all audio consumed,
 /// skip tail transcription). When no thread was running: returns ([], 0).
 pub fn stop_streaming() -> (Vec<String>, usize) {
+    // Snapshot the buffer length BEFORE signaling stop.
+    // Audio capture is still running, so the buffer keeps growing.
+    // The streaming thread uses this as a cutoff to avoid processing
+    // audio recorded after the user pressed stop.
+    let (_, buf_len) = snapshot_whisper_buffer(0);
+    VOXTRAL_STOP_BUFFER_LEN.store(buf_len, Ordering::SeqCst);
+    log::debug!("stop buffer cutoff: {} samples ({:.2}s)", buf_len, buf_len as f64 / 16000.0);
+
     // Signal stop
     VOXTRAL_STREAMING_STOP.store(true, Ordering::SeqCst);
 
-    // Join thread with timeout to prevent hanging if the C code blocks
+    // Wait for the streaming thread to finish. This includes vox_stream_finish()
+    // which processes remaining buffered audio. We MUST wait (no timeout) because:
+    // 1. The thread holds Arc<VoxtralContext> — abandoning it while starting
+    //    a new transcription would cause concurrent C library access (unsafe)
+    // 2. finish() produces the final tokens we need — abandoning loses them
+    // 3. The caller skips tail transcription when we return usize::MAX,
+    //    so this is the ONLY chance to process the audio
     let handle = VOXTRAL_STREAM_HANDLE.lock().unwrap().take();
     let thread_was_running = handle.is_some();
     if let Some(h) = handle {
-        // Wait up to 10 seconds for the streaming thread to finish.
-        // vox_stream_finish() processes remaining audio and can be slow.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if h.is_finished() {
-                h.join().ok();
-                log::info!("Voxtral streaming thread joined");
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                log::warn!("Voxtral streaming thread did not finish within 10s, abandoning");
-                // Thread is leaked but won't block the UI. It will eventually
-                // complete and be cleaned up when the process exits.
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
+        let start = std::time::Instant::now();
+        h.join().ok();
+        let elapsed = start.elapsed().as_secs_f64();
+        log::info!("Voxtral streaming thread joined in {:.2}s", elapsed);
     }
 
     let results = std::mem::take(&mut *VOXTRAL_STREAMING_RESULTS.lock().unwrap());
     log::info!("Voxtral streaming results: {} segments", results.len());
 
     if thread_was_running {
-        // Streaming was active — all audio was consumed incrementally,
-        // so skip tail transcription.
+        // Streaming was active — all audio was consumed incrementally
+        // (including finish() processing remaining buffered audio).
+        // Return usize::MAX so the caller skips tail transcription.
         (results, usize::MAX)
     } else {
         // No streaming thread was running (model wasn't loaded).
@@ -433,6 +440,17 @@ pub fn stop_streaming() -> (Vec<String>, usize) {
 /// Main streaming loop. Polls WHISPER_BUFFER every 50ms, feeds new audio
 /// to the voxtral stream, and collects decoded tokens.
 fn voxtral_stream_loop(ctx: Arc<VoxtralContext>) {
+    // Boost thread priority to user-interactive so we don't get preempted
+    // under system load. This is a real-time transcription thread.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        // QOS_CLASS_USER_INTERACTIVE = 0x21
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        pthread_set_qos_class_self_np(0x21, 0);
+    }
+
     let stream = match ctx.stream_init() {
         Ok(s) => s,
         Err(e) => {
@@ -443,51 +461,154 @@ fn voxtral_stream_loop(ctx: Arc<VoxtralContext>) {
 
     // Enable continuous mode for live recording
     stream.set_continuous(true);
+    // Reduce processing interval from 2.0s default to 1.0s — halves max queued
+    // audio at stop time, cutting worst-case encoder work significantly.
+    stream.set_processing_interval(1.0);
 
     let mut abs_position: usize = 0;
     let poll_interval = std::time::Duration::from_millis(50);
+    let loop_start = std::time::Instant::now();
+    let mut total_fed: usize = 0;
+    let mut feed_count: u32 = 0;
+    let mut token_count: u32 = 0;
+
+    // Periodic force_encode to keep encoder/decoder current during recording,
+    // so there's minimal backlog when stop fires.
+    let mut last_force_encode = std::time::Instant::now();
+    let force_encode_interval = std::time::Duration::from_secs(3);
 
     while !VOXTRAL_STREAMING_STOP.load(Ordering::SeqCst) {
         // Get new audio since last position
         let (new_samples, new_len) = snapshot_whisper_buffer(abs_position);
 
         if !new_samples.is_empty() {
+            let chunk_len = new_samples.len();
+            let feed_start = std::time::Instant::now();
+
             // Feed new audio to voxtral
             if let Err(e) = stream.feed(&new_samples) {
-                log::error!("Voxtral stream feed error: {}", e);
+                log::error!("Voxtral feed error: {}", e);
                 break;
             }
             abs_position = new_len;
+            total_fed += chunk_len;
+            feed_count += 1;
+
+            let feed_ms = feed_start.elapsed().as_millis();
+            if feed_ms > 100 {
+                log::debug!(
+                    "feed #{} took {}ms ({} samples, {:.2}s total fed)",
+                    feed_count, feed_ms, chunk_len, total_fed as f64 / 16000.0
+                );
+            }
         }
 
         // Poll for decoded tokens
         let tokens = stream.get_tokens(64);
         if !tokens.is_empty() {
             let text: String = tokens.join("");
+            token_count += tokens.len() as u32;
+            log::debug!("got {} tokens: '{}'", tokens.len(),
+                if text.len() > 80 { &text[..80] } else { &text });
             if !text.trim().is_empty() {
                 VOXTRAL_STREAMING_RESULTS.lock().unwrap().push(text);
             }
         }
 
+        // Periodically force the encoder/decoder to process accumulated mel frames.
+        // This keeps them current so there's minimal backlog when stop fires.
+        if last_force_encode.elapsed() >= force_encode_interval && total_fed > 0 {
+            if let Err(e) = stream.force_encode() {
+                log::error!("force_encode error: {}", e);
+            } else {
+                // Collect any tokens produced by force_encode
+                let tokens = stream.get_tokens(64);
+                if !tokens.is_empty() {
+                    let text: String = tokens.join("");
+                    token_count += tokens.len() as u32;
+                    log::debug!("force_encode produced {} tokens", tokens.len());
+                    if !text.trim().is_empty() {
+                        VOXTRAL_STREAMING_RESULTS.lock().unwrap().push(text);
+                    }
+                }
+            }
+            last_force_encode = std::time::Instant::now();
+        }
+
         std::thread::sleep(poll_interval);
     }
 
-    // Finish the stream — process remaining buffered audio
-    if let Err(e) = stream.finish() {
-        log::error!("Voxtral stream finish error: {}", e);
+    let loop_elapsed = loop_start.elapsed().as_secs_f64();
+    log::info!(
+        "Voxtral loop ended: {:.2}s, {} feeds, {:.2}s audio, {} tokens",
+        loop_elapsed, feed_count, total_fed as f64 / 16000.0, token_count
+    );
+
+    // Feed remaining audio from the buffer up to the stop cutoff.
+    // The encoder blocks for seconds per pass (4B model), so most of the
+    // recorded audio is still in WHISPER_BUFFER when the stop signal fires.
+    // We only feed up to VOXTRAL_STOP_BUFFER_LEN to avoid processing audio
+    // that was recorded after the user pressed stop (capture keeps running).
+    let stop_cutoff = VOXTRAL_STOP_BUFFER_LEN.load(Ordering::SeqCst);
+    let remaining_limit = if stop_cutoff > abs_position { stop_cutoff - abs_position } else { 0 };
+    let (remaining_buf, _) = snapshot_whisper_buffer(abs_position);
+    let remaining_samples = if remaining_buf.len() > remaining_limit {
+        &remaining_buf[..remaining_limit]
+    } else {
+        &remaining_buf[..]
+    };
+    if !remaining_samples.is_empty() {
+        log::debug!(
+            "feeding remaining {} samples ({:.2}s) after stop",
+            remaining_samples.len(),
+            remaining_samples.len() as f64 / 16000.0
+        );
+        let feed_start = std::time::Instant::now();
+        if let Err(e) = stream.feed(remaining_samples) {
+            log::error!("remaining feed error: {}", e);
+        } else {
+            total_fed += remaining_samples.len();
+            let feed_ms = feed_start.elapsed().as_millis();
+            log::debug!("remaining feed took {}ms", feed_ms);
+        }
+
+        // Collect any tokens produced by the remaining feed
+        let tokens = stream.get_tokens(64);
+        if !tokens.is_empty() {
+            let text: String = tokens.join("");
+            token_count += tokens.len() as u32;
+            log::debug!("got {} tokens from remaining feed", tokens.len());
+            if !text.trim().is_empty() {
+                VOXTRAL_STREAMING_RESULTS.lock().unwrap().push(text);
+            }
+        }
     }
 
+    // Finish the stream — process any final buffered mel frames
+    let finish_start = std::time::Instant::now();
+    if let Err(e) = stream.finish() {
+        log::error!("Voxtral finish error: {}", e);
+    }
+    let finish_ms = finish_start.elapsed().as_millis();
+
     // Drain remaining tokens after finish
+    let mut drain_count: u32 = 0;
     loop {
         let tokens = stream.get_tokens(64);
         if tokens.is_empty() {
             break;
         }
         let text: String = tokens.join("");
+        drain_count += tokens.len() as u32;
+        log::debug!("drain: {} tokens", tokens.len());
         if !text.trim().is_empty() {
             VOXTRAL_STREAMING_RESULTS.lock().unwrap().push(text);
         }
     }
+    log::info!(
+        "Voxtral finish: {}ms, drained {} tokens, total: {}",
+        finish_ms, drain_count, token_count + drain_count
+    );
 
     // stream is dropped here (calls vox_stream_free)
     log::info!("Voxtral streaming loop finished");
