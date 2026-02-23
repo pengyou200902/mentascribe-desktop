@@ -365,7 +365,7 @@ void vox_free(vox_ctx_t *ctx) {
 #define TOKEN_TEXT_MIN     1000
 
 #define RAW_AUDIO_LENGTH_PER_TOK 1280
-#define OFFLINE_STREAMING_BUFFER_TOKENS 3
+#define OFFLINE_STREAMING_BUFFER_TOKENS 10
 
 /* First chunk minimum mel frames (enough for 39 prompt adapter tokens) */
 #define STREAM_FIRST_CHUNK_MIN_MEL  312
