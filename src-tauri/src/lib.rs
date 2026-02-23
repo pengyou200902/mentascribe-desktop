@@ -168,7 +168,7 @@ fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> 
         if is_voxtral_engine(&settings) {
             #[cfg(feature = "voxtral")]
             {
-                let delay_ms = settings.transcription.voxtral_delay_ms.unwrap_or(480);
+                let delay_ms = settings.transcription.voxtral_delay_ms.unwrap_or(240);
                 transcription::voxtral::start_streaming(transcription::voxtral::StreamingConfig {
                     delay_ms,
                 }).map_err(|e| {

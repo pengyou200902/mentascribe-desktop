@@ -301,7 +301,7 @@ pub async fn transcribe(
     let delay_ms = settings
         .transcription
         .voxtral_delay_ms
-        .unwrap_or(480);
+        .unwrap_or(240);
     ctx.set_delay(delay_ms);
 
     // Run transcription in a blocking thread
