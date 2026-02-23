@@ -269,7 +269,13 @@ async fn stop_recording(
         eprintln!("[recording] No streaming results (no completed utterances detected)");
         None
     } else {
-        let prefix = streaming_results.join(" ");
+        // Voxtral tokens include their own spacing (e.g. " Hello," " world.").
+        // Whisper segments are separate sentences that need a space between them.
+        let prefix = if use_voxtral {
+            streaming_results.join("")
+        } else {
+            streaming_results.join(" ")
+        };
         eprintln!(
             "[recording] Streaming results: {} segments, {} consumed samples, prefix='{}...'",
             streaming_results.len(),
@@ -330,10 +336,20 @@ async fn stop_recording(
     let duration_ms = (audio_data.samples.len() as f32 / audio_data.sample_rate as f32 * 1000.0) as u32;
 
     // Transcribe remaining tail audio and combine with streaming prefix.
-    // Voxtral streaming consumes ALL audio incrementally (consumed_samples == usize::MAX),
-    // so the tail will be empty and we just return the streaming prefix.
-    eprintln!("[recording] Starting tail transcription...");
-    let raw_text = if use_voxtral {
+    // Voxtral streaming processes ALL audio incrementally (including finish()),
+    // so when consumed_samples == usize::MAX we skip tail transcription entirely —
+    // the streaming results ARE the final transcription.
+    let raw_text = if use_voxtral && consumed_samples == usize::MAX {
+        // Voxtral streaming already processed everything. No tail needed.
+        let text = streaming_prefix.unwrap_or_default();
+        eprintln!(
+            "[recording] Voxtral streaming handled all audio, skipping tail transcription (text='{}')",
+            if text.len() > 60 { &text[..60] } else { &text }
+        );
+        text
+    } else if use_voxtral {
+        // Voxtral streaming wasn't active (model not loaded), try one-shot
+        eprintln!("[recording] Starting voxtral one-shot transcription...");
         #[cfg(feature = "voxtral")]
         {
             transcription::voxtral::transcribe(audio_data, &settings, streaming_prefix)
