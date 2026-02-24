@@ -1,261 +1,237 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-02-20
+**Analysis Date:** 2026-02-24
 
 ## Naming Patterns
 
 **Files:**
-- React components: PascalCase (e.g., `DictationBar.tsx`, `Dashboard.tsx`, `HistoryPage.tsx`)
-- Utility/store files: camelCase (e.g., `store.ts`, `tauri.ts`, `historyStore.ts`)
-- Rust modules: snake_case (e.g., `mod.rs`, `capture.rs`, `cloud.rs`)
-- Type definition files: `index.ts` for type exports
+- React components: PascalCase (e.g., `DictationBar.tsx`, `HistoryPage.tsx`)
+- Utilities/stores: camelCase (e.g., `historyStore.ts`, `dictionaryStore.ts`)
+- Config files: camelCase (e.g., `widget.ts`)
+- Rust modules: snake_case (e.g., `settings/mod.rs`, `audio/capture.rs`)
+- Rust files: snake_case matching their module purpose
 
 **Functions:**
-- TypeScript/JavaScript: camelCase (e.g., `startRecording()`, `stopRecording()`, `saveToHistory()`)
-- Rust: snake_case (e.g., `calculate_rms()`, `get_current_level()`, `capitalize_sentences()`)
-- React hooks: camelCase starting with `use` (e.g., `useStore()`, `useHistoryStore()`)
+- TypeScript/JavaScript: camelCase (e.g., `startRecording()`, `loadHistory()`)
+- Rust: snake_case (e.g., `get_settings_path()`, `setup_hotkey()`)
+- Tauri commands: snake_case (e.g., `start_recording`, `stop_recording`, `inject_text`)
 
 **Variables:**
-- Constants: UPPER_SNAKE_CASE for window levels and magic numbers
-  - Example: `OVERLAY_WINDOW_LEVEL = 25`, `NS_NONACTIVATING_PANEL_MASK = 128`
-- State variables: camelCase (e.g., `isRecording`, `audioLevel`, `waveformBars`)
-- Refs: camelCase with `Ref` suffix (e.g., `widgetRef`, `audioLevelRef`, `isRecordingRef`)
+- React hooks/state: camelCase (e.g., `isRecording`, `audioLevel`, `isLoading`)
+- Constants: UPPER_SNAKE_CASE in config files (e.g., `WAVEFORM_BAR_COUNT`, `CURSOR_POLL_INTERVAL_MS`)
+- Zustand stores: camelCase properties (e.g., `entries`, `totalCount`, `error`)
+- Rust structs: PascalCase (e.g., `TranscriptionSettings`, `DictionaryEntry`)
+- Rust constants: UPPER_SNAKE_CASE (e.g., `OVERLAY_WINDOW_LEVEL`, `NS_NONACTIVATING_PANEL_MASK`)
 
 **Types:**
-- Interfaces: PascalCase (e.g., `DictationBarProps`, `UserSettings`, `TranscriptionEntry`)
-- Enums: PascalCase (e.g., `WindowType`, `DashboardPage`)
-- Type unions: PascalCase (e.g., `WindowType = 'dictation' | 'dashboard'`)
+- TypeScript interfaces: PascalCase (e.g., `DictationBarProps`, `HistoryStore`, `UserSettings`)
+- Rust enums/structs: PascalCase (e.g., `WhisperError`, `SettingsError`, `HotkeyError`)
+- Union types: Use `type` keyword for small unions (e.g., `type WindowType = 'dictation' | 'dashboard'`)
 
 ## Code Style
 
 **Formatting:**
-- Prettier 3.2.0 - configured via package.json scripts
-  - Run via `npm run format` to format `src/**/*.{ts,tsx,css}`
-- Tab width: 2 spaces (default Prettier)
-- Line length: Default Prettier (80 characters)
-- Quotes: Single quotes in TypeScript, double quotes in JSX attributes
+- Prettier configured for TypeScript/TSX (version ^3.2.0)
+- ESLint configured (versions ^8.57.0 with TypeScript support)
+- Run: `npm run format` to apply Prettier formatting
+- Run: `npm run lint:fix` to fix ESLint issues
 
 **Linting:**
-- ESLint 8.57.0 with TypeScript support
-  - Parser: `@typescript-eslint/parser`
-  - Plugins: `@typescript-eslint/eslint-plugin`, `eslint-plugin-react`, `eslint-plugin-react-hooks`
-  - Run via `npm run lint` to check, `npm run lint:fix` to auto-fix
-  - Config: embedded in package.json (not checked; assume standard TS/React rules)
+- TypeScript strict mode enabled: `"strict": true` in `tsconfig.json`
+- Unused variable detection: `"noUnusedLocals": true`, `"noUnusedParameters": true`
+- No fallthrough switch cases: `"noFallthroughCasesInSwitch": true`
+- ESLint plugins: `eslint-plugin-react`, `eslint-plugin-react-hooks`
+- Command: `npm run lint` to check only, `npm run lint:fix` to auto-fix
 
-**TypeScript Configuration:**
-- Target: ES2020
-- Module: ESNext
-- Strict mode enabled: `"strict": true`
-- Unused variables flagged: `"noUnusedLocals": true`, `"noUnusedParameters": true`
-- All `.ts` and `.tsx` files must pass `npm run typecheck` (tsc --noEmit)
+**Rust style:**
+- Standard Rust formatting via rustfmt (implicit via Cargo.toml edition="2021")
+- Error types use `#[derive(Error, Debug)]` with `thiserror` crate
+- Logging with `log::info!()`, `log::error!()`, and `eprintln!()` for debugging
+- Documentation comments on public functions with `///`
 
 ## Import Organization
 
-**Order:**
-1. External React/Tauri imports (e.g., `import { FC } from 'react'`, `import { invoke } from '@tauri-apps/api/core'`)
-2. Type imports from local types (e.g., `import type { DashboardPage } from '../../types'`)
-3. Local component imports (e.g., `import { DictationBar } from './components/DictationBar'`)
-4. Local utility/store imports (e.g., `import { useStore } from './lib/store'`)
-5. CSS imports (e.g., `import '../../styles/main.css'`)
+**Order (TypeScript):**
+1. React and external libraries (`import React from 'react'`, `import { create } from 'zustand'`)
+2. Tauri API imports (`import { invoke } from '@tauri-apps/api/core'`, `import { listen } from '@tauri-apps/api/event'`)
+3. Internal components (relative paths from current file)
+4. Internal utilities/stores (relative paths from current file)
+5. Type imports (use `import type` to avoid circular dependencies)
+
+**Pattern observed:**
+```typescript
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { DictationBar } from './components/DictationBar';
+import { useStore } from './lib/store';
+import type { UserSettings } from '../types';
+```
+
+**Rust import order:**
+1. Standard library (`use std::...`)
+2. External crates (`use serde::{...}`, `use tauri::{...}`)
+3. Crate modules (`use crate::audio::{...}`)
+4. Re-exports from super modules (`use super::{...}`)
 
 **Path Aliases:**
-- No path aliases configured; use relative imports with `../` and `./`
-- Imports within `src/` use relative paths (e.g., `'./components/'`, `'../lib/'`)
-
-**Type Imports:**
-- Use `import type` for TypeScript-only imports where possible
-- Example: `import type { DashboardPage } from '../../types'`
+- None configured for TypeScript — uses relative imports throughout
+- Rust uses module paths relative to crate root
 
 ## Error Handling
 
-**Patterns:**
-- Try-catch blocks are standard for async operations
-- Error logging: Always use `console.error()` with descriptive message and error object
-  - Example: `console.error('Failed to save to history:', e);`
-  - Include context in message, don't just log the error
-- User-facing errors: Set to state (e.g., `setError()`) and auto-clear with `setTimeout()`
-  - Example: `setError('Mic busy — try again'); setTimeout(() => setError(null), 2000);`
-  - Errors typically clear after 2-5 seconds depending on severity
-- Rust errors: Use `thiserror` crate for custom error types with `#[error]` attributes
-  - Example from `settings/mod.rs`: `#[error("IO error: {0}")]`
-- Silent failures: Use `.catch(() => {})` when fire-and-forget operations should not block
-  - Example: `invoke('frontend_log', { msg }).catch(() => {})`
+**TypeScript Patterns:**
 
-**Special patterns:**
-- Detecting error types: Check error message with `.includes()` for specific conditions
-  - Example: `if (errorMessage.includes('Model not found')) { ... }`
-- Catching unknown errors in Rust: Use `err: unknown` and convert with `instanceof Error ? err.message : String(err)`
+- Try-catch blocks with type narrowing:
+```typescript
+try {
+  const text = await invoke<string>('stop_recording');
+} catch (err: unknown) {
+  const errorMessage = err instanceof Error ? err.message : String(err);
+}
+```
+
+- Console error logging: `console.error('Failed to load history:', error)`
+- Error state in stores: `error: string | null` field, set on catch
+- Error display in UI: Show errors temporarily, auto-clear with setTimeout
+- Zustand actions throw errors for caller to handle (e.g., `deleteEntry()` throws)
+- Refs to avoid stale closures in async handlers (e.g., `isRecordingRef.current`)
+
+**Rust Patterns:**
+
+- Custom error enums with `#[derive(Error, Debug)]`:
+```rust
+#[derive(Error, Debug)]
+pub enum SettingsError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Serialization error: {0}")]
+    SerdeError(#[from] serde_json::Error),
+}
+```
+
+- Tauri command return type: `Result<T, String>` (error as string for IPC serialization)
+- Detailed logging before errors: `eprintln!("[module] Descriptive message")` for debugging
+- `log::info!()` and `log::error!()` for production logging
+- Lock unwrapping: `.map_err(|e| e.to_string())?` pattern for Mutex locks
+- Module-specific error types for internal functions
 
 ## Logging
 
-**Framework:** `console` object (no logging library in frontend)
+**Framework:** Built-in `console.*` in TypeScript, `log` crate in Rust with `env_logger`
 
 **Patterns:**
-- Info: `console.log('message')` for lifecycle events
-- Error: `console.error('message', error)` for exceptions
-- Conditional context logging: Use bracket prefixes for categorized logs
-  - Examples: `console.log('[poll] ...')`, `console.log('[drag] ...')`, `console.log('[app] ...')`
-  - Helps trace execution flow in mixed frontend-backend scenarios
-- Rust: `log` crate (0.4) + `env_logger` (0.11)
-  - Info level: `log::info!()`
-  - Error level: `log::error!()`
-  - Debug prints for critical errors: `println!("[context] ...")` for terminal output visibility
 
-**What to log:**
-- Async operation start/completion (with context about what changed)
-- Error conditions with full error message and state
-- State changes that affect UI behavior (e.g., draggable prop changes, monitor repositioning)
-- Frontend-to-backend invocation boundaries (for debugging FFI issues)
+- TypeScript console: `console.log()` for info, `console.error()` for errors
+- Rust: `log::info!()`, `log::error!()` for structured logging
+- Rust debug: `eprintln!()` with prefixes like `[recording]`, `[nspanel]`, `[poll]` for CLI debugging
+- Frontend to Rust logging via `invoke('frontend_log', { msg })` command
+- Disable logging in invoke calls: `.catch(() => {})` for non-critical ops
 
-**What NOT to log:**
-- Sensitive data (API keys, tokens, passwords) — never log these
-- High-frequency updates like audio level changes — can spam logs
-- Internal implementation details that don't affect behavior
+**When to log:**
+- State transitions (recording started/stopped)
+- Async operation start/end
+- Error conditions
+- Event listener setup/teardown
+- Monitor polling (logged at frequency intervals to avoid spam)
 
 ## Comments
 
 **When to Comment:**
-- Complex algorithms: Explain the "why" not the "what"
-  - Example in `DictationBar.tsx`: `// Create a wave-like pattern with center bars taller`
-- Non-obvious logic: When code behavior differs from naming
-  - Example: Explaining why refs are used instead of state
-- Workarounds and hacks: Explain the reason for unusual code patterns
-  - Example in `App.tsx`: `// Set ref immediately to prevent duplicate calls during await`
-- Critical macOS-specific behavior: Always document NSPanel and coordinate quirks
-- FFI boundaries: Note when code bridges Rust and TypeScript/JavaScript
+- Explain WHY, not WHAT (code shows what it does)
+- Complex algorithms: Explain the logic and intent
+- Non-obvious Tauri/platform workarounds
+- Temporary workarounds with issue references (e.g., `// FIXME: Tauri issue #7890`)
+- Critical performance notes or gotchas
 
 **JSDoc/TSDoc:**
-- Used selectively, primarily for exported functions and interfaces
-- Example from `tauri.ts`:
-  ```typescript
-  /**
-   * Start audio recording
-   */
-  export async function startRecording(): Promise<void> {
-  ```
-- Not used for internal functions; inline comments preferred
-- Type annotations are considered documentation
+- Used on public functions in utilities (e.g., `tauri.ts` API wrappers)
+- Format: `/** Doc comment */` above function
+```typescript
+/**
+ * Stop recording and get transcribed text
+ */
+export async function stopRecording(): Promise<string> {
+  return invoke('stop_recording');
+}
+```
+
+- Rust: `///` doc comments on public functions
+```rust
+/// Parse a key name string to a Code enum
+fn parse_key_code(key: &str) -> Result<Code, HotkeyError> {
+```
 
 ## Function Design
 
 **Size:**
-- Prefer functions under 50 lines when possible
-- Complex state machines (like `App.tsx` event handlers) may exceed this
-- Large components split concerns into sub-components
+- Prefer < 50 lines for React components; larger components split into helper render functions (e.g., `renderRecording()`, `renderError()`)
+- Helper render functions extracted within component body
+- Zustand store methods typically 10-30 lines
 
 **Parameters:**
-- Max 3-4 required parameters; use object destructuring for more
-- Props interfaces use destructuring in function signature
-  - Example: `export const DictationBar: FC<DictationBarProps> = ({ isRecording, isProcessing, ... }) => {`
-- Optional parameters marked with `?` in interfaces
-- Default values provided as fallback (e.g., `isPreloading = false`)
+- React components use typed Props interfaces
+- Zustand actions destructure state/get into parameters
+- Rust commands accept minimal parameters; use `AppState` for shared data
+- Optional parameters use TypeScript `?` (e.g., `isPreloading?: boolean = false`)
 
 **Return Values:**
-- Async functions return Promises with typed payloads
-  - Example: `async function stopRecording(): Promise<string>`
-- React components return JSX
-- Utility functions return data or void
-- Use early returns to reduce nesting:
-  ```typescript
-  if (!condition) return;
-  // main logic here
-  ```
+- Promises in async functions: `Promise<T>` for TypeScript, `async fn` in Rust
+- Tauri commands return `Result<T, String>`
+- Void operations return `Promise<void>` or `void`
+- Render functions return JSX.Element implicitly
 
-**Arrow Functions vs Named Functions:**
-- React components: Named functions preferred for readability and error traces
-  - Example: `function DashboardContent() { ... }`
-- Callbacks and handlers: Arrow functions for lexical `this` binding
-  - Example: `const handleMouseMove = (e: MouseEvent) => { ... }`
-- Store/Zustand: Arrow functions for closure access
-  - Example: `loadHistory: async () => { ... }`
+**Refs and Closures:**
+- Use refs to capture current values in event listeners (e.g., `isRecordingRef.current`)
+- Prevents stale closure bugs in async handlers
+- Common pattern: set ref in useEffect dependency, read in callback
 
 ## Module Design
 
 **Exports:**
-- Named exports for utilities and stores
-  - Example: `export const useStore = create<Store>(...)`
-- Default exports for React components (both are present)
-  - Example: `export default App;` and standalone export `export const DictationBar`
-- Barrel files: `index.ts` in type directories for convenient imports
-  - Example: `src/types/index.ts` exports all type interfaces
 
-**Module Organization:**
-- One component per file (e.g., `DictationBar.tsx` contains only `DictationBar`)
-- Props interfaces in same file as component, above component definition
-- Stores in separate `*Store.ts` files (e.g., `historyStore.ts`, `dictionaryStore.ts`)
-- Utilities grouped by domain (e.g., `src/lib/tauri.ts` for Tauri FFI wrappers)
+- Default exports: React components (one per file)
+- Named exports: Utilities, stores, types
+- Example: `export const useHistoryStore = create<HistoryStore>(...)`
+- Tauri commands exported via `invoke('command-name')` pattern
 
-**Rust Module Structure:**
-- `mod.rs` files contain public API and re-exports
-  - Example from `audio/mod.rs`: `pub mod capture; pub mod vad; pub use capture::AudioData;`
-- Submodules (`capture.rs`, `vad.rs`) contain implementation
-- Error types defined in `mod.rs` or submodule with `pub enum ErrorType { ... }`
-- Tests in same file as implementation using `#[cfg(test)] mod tests { ... }`
+**Barrel Files:**
+- None used — imports are explicit and relative
+- All imports go directly to their source files
 
-## Zustand Store Pattern
+**Type Imports:**
+- Use `import type` for TypeScript types to avoid circular dependencies
+- Pattern: `import type { DashboardPage } from '../../types'`
 
-**Store Definition:**
-```typescript
-interface Store {
-  // State properties
-  settings: UserSettings | null;
-  isLoading: boolean;
+**Store Pattern (Zustand):**
+- Create store with `create<Interface>((set, get) => ({...}))`
+- All store methods are async and handle their own error logging
+- Errors either thrown or stored in `error` field
+- State destructured in components: `const { entries, isLoading } = useHistoryStore()`
 
-  // Methods
-  loadSettings: () => Promise<void>;
-  updateSettings: (settings: UserSettings) => Promise<void>;
-}
+## Special Patterns
 
-export const useStore = create<Store>((set) => ({
-  settings: null,
-  isLoading: false,
+**Tauri Invoke Pattern:**
+- Type-safe: `await invoke<ReturnType>('command-name', { arg1, arg2 })`
+- Commands live in Rust (`src-tauri/src/lib.rs` and modules)
+- Frontend calls via imported `invoke()` from `@tauri-apps/api/core`
+- Errors bubble as strings or thrown errors
 
-  loadSettings: async () => {
-    set({ isLoading: true });
-    try {
-      const data = await invoke('get_settings');
-      set({ settings: data, isLoading: false });
-    } catch (error) {
-      console.error('Failed to load settings:', error);
-      set({ isLoading: false });
-    }
-  },
-  // ... more methods
-}));
-```
+**Event Listening:**
+- Pattern: `const unlisten = listen('event-name', (event) => { ... })`
+- Cleanup in useEffect return: `unlisten.then((fn) => fn())`
+- No unlistening in cleanup = memory leak (all async unlistens)
 
-- Single store per domain (settings, history, dictionary, stats)
-- Use `get()` inside actions to read current state
-- Always wrap async operations in try-catch
-- Set error state explicitly if needed
+**Zustand with Tauri:**
+- Stores invoke Tauri commands
+- Set state after successful invoke
+- Throw errors or store in error field for caller handling
+- No automatic retry logic — caller decides
 
-## React Patterns
-
-**Hooks Usage:**
-- `useState`: For local component state
-- `useRef`: For mutable values that don't trigger re-render (e.g., animation refs)
-- `useEffect`: For side effects with proper cleanup
-- `useCallback`: For event handlers and functions passed to other components
-- `FC<Props>`: Functional component with typed props
-
-**State Synchronization:**
-- Use refs to prevent stale closures in event listeners
-- Keep refs in sync with state via separate `useEffect`
-  - Example: `useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording])`
-
-**Event Listeners:**
-- Always clean up listeners in return function from `useEffect`
-- Use Tauri's `listen()` with proper unlisten in cleanup:
-  ```typescript
-  const unlisten = listen('event-name', (payload) => { ... });
-  return () => { unlisten.then((fn) => fn()); };
-  ```
-
-**Conditional Rendering:**
-- Use ternary operators for simple conditions
-- Use if statements for complex logic before JSX
-- Pattern in `DictationBar.tsx`: `{error ? renderError() : isProcessing ? renderProcessing() : isRecording ? renderRecording() : ...}`
+**Refs in React:**
+- Sync refs with state in useEffect: `useEffect(() => { ref.current = value }, [value])`
+- Read in callbacks to avoid stale closures
+- Common for recording, animation, and polling state
 
 ---
 
-*Convention analysis: 2026-02-20*
+*Convention analysis: 2026-02-24*

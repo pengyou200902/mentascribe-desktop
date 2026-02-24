@@ -1,301 +1,266 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-02-20
+**Analysis Date:** 2026-02-24
 
 ## Directory Layout
 
 ```
 mentascribe-desktop/
-├── src/                           # Frontend React/TypeScript
-│   ├── App.tsx                    # Root component, window detection, event setup
-│   ├── main.tsx                   # React DOM render entry point
-│   ├── components/                # Reusable React components
-│   │   ├── DictationBar.tsx       # Fullscreen overlay UI (waveform, record button)
-│   │   ├── MenuBar.tsx            # Menu bar with theme toggle
-│   │   ├── History.tsx            # Transcription history (legacy, see HistoryPage)
-│   │   ├── Settings.tsx           # Legacy settings UI
-│   │   ├── TranscriptionOverlay.tsx # Unused overlay component
-│   │   └── dashboard/             # Dashboard (settings, history, stats)
-│   │       ├── Dashboard.tsx      # Dashboard router component
-│   │       ├── HomePage.tsx       # Dashboard home page
-│   │       ├── HistoryPage.tsx    # Browse transcription history
-│   │       ├── DictionaryPage.tsx # Manage dictionary replacements
-│   │       ├── SettingsPage.tsx   # All user settings
-│   │       └── Sidebar.tsx        # Dashboard sidebar navigation
-│   ├── hooks/                     # Custom React hooks (if any)
-│   ├── icons/                     # SVG icon components
-│   ├── lib/                       # Utilities and stores
-│   │   ├── store.ts              # Zustand settings store (main state management)
-│   │   ├── tauri.ts              # Tauri API wrappers/helpers
-│   │   ├── theme.tsx             # Theme provider (light/dark)
-│   │   ├── historyStore.ts       # Zustand history store
-│   │   ├── dictionaryStore.ts    # Zustand dictionary store
-│   │   └── statsStore.ts         # Zustand stats store
-│   ├── styles/                    # Global CSS and Tailwind
-│   │   └── globals.css            # Global styles, Tailwind directives
-│   └── types/                     # TypeScript type definitions
-│       └── index.ts               # Exported types (DashboardPage, UserSettings, etc.)
-├── src-tauri/                     # Rust backend (Tauri 2)
-│   ├── src/                       # Rust source code
-│   │   ├── main.rs                # Binary entry point (calls lib.rs::run())
-│   │   ├── lib.rs                 # Library entry point: Tauri setup, commands, window creation
-│   │   ├── audio/                 # Audio capture and processing
-│   │   │   ├── mod.rs             # Module definition (re-exports)
-│   │   │   ├── capture.rs         # CPAL audio stream, resampling to 16kHz mono
-│   │   │   └── vad.rs             # Voice Activity Detection (VAD) for streaming transcription
-│   │   ├── transcription/         # Speech-to-text
-│   │   │   ├── mod.rs             # Module definition, ModelInfo structs
-│   │   │   ├── whisper.rs         # Local Whisper (whisper-rs crate)
-│   │   │   └── cloud.rs           # Cloud providers (AWS, OpenAI, AssemblyAI)
-│   │   ├── injection/             # Text injection into focused app
-│   │   │   └── mod.rs             # Platform-specific text typing via CGEvent (macOS), Win32 (Windows), X11 (Linux)
-│   │   ├── hotkey/                # Global hotkey registration
-│   │   │   └── mod.rs             # F1–F12 hotkey parsing and setup
-│   │   ├── settings/              # User settings persistence
-│   │   │   └── mod.rs             # Serde structs, load/save from ~/.config/mentascribe/settings.json
-│   │   ├── history/               # Transcription history persistence
-│   │   │   └── mod.rs             # TranscriptionEntry, load/save from ~/.config/mentascribe/history.json
-│   │   ├── dictionary/            # Dictionary replacements (e.g., "teh" → "the")
-│   │   │   └── mod.rs             # Load dictionary rules, apply replacements to text
-│   │   ├── stats/                 # Usage statistics
-│   │   │   └── mod.rs             # Record word count, duration, frequency
-│   │   ├── text/                  # Text post-processing
-│   │   │   └── mod.rs             # Auto-capitalize, punctuation rules
-│   │   └── api/                   # External API client (future cloud features)
-│   │       ├── mod.rs             # API client setup
-│   │       └── client.rs          # HTTP request helpers
-│   ├── Cargo.toml                 # Rust dependencies: tauri, cpal, whisper-rs, etc.
-│   ├── tauri.conf.json            # Tauri app config (window layout, resources)
-│   └── build.rs                   # Build script for platform-specific features
-├── dist/                          # Built frontend (vite output)
-├── .planning/                     # Codebase documentation
-│   └── codebase/                  # GSD analysis documents
-├── docs/                          # User/developer documentation
-├── vite.config.ts                 # Vite bundler config for frontend
-├── tsconfig.json                  # TypeScript compiler options
-├── package.json                   # Frontend dependencies (React, Zustand, Tauri API)
-├── postcss.config.js              # PostCSS + Tailwind integration
-├── tailwind.config.js             # Tailwind CSS config
-├── index.html                     # HTML entry point
-└── README.md                      # Project overview
+├── index.html              # Tauri WebviewWindow entry point
+├── package.json            # Frontend dependencies (React, Tauri, Tailwind, etc)
+├── tsconfig.json           # TypeScript config
+├── vite.config.ts          # Vite build config
+├── tailwind.config.js      # Tailwind CSS config
+├── postcss.config.js       # PostCSS config
+│
+├── src/                    # Frontend (React/TypeScript)
+│   ├── main.tsx            # React root mount
+│   ├── App.tsx             # Main router (dictation vs dashboard)
+│   ├── types/              # Shared types (DashboardPage, TranscriptionEntry, etc)
+│   │   └── index.ts
+│   ├── config/             # Centralized constants
+│   │   └── widget.ts       # Dictation pill animation/timing constants
+│   ├── lib/                # Shared utilities and state
+│   │   ├── store.ts        # Zustand settings store
+│   │   ├── tauri.ts        # Tauri command wrappers (deprecated, use invoke directly)
+│   │   ├── theme.tsx       # Theme provider (light/dark)
+│   │   ├── historyStore.ts # Zustand history state
+│   │   ├── dictionaryStore.ts # Zustand dictionary state
+│   │   └── statsStore.ts   # Zustand stats state
+│   ├── styles/             # Global CSS
+│   │   └── globals.css     # Tailwind imports, shared styles
+│   ├── components/         # Reusable UI components
+│   │   ├── DictationBar.tsx      # Fullscreen overlay (pill + waveform + error)
+│   │   ├── History.tsx            # Transcription history list
+│   │   ├── Settings.tsx           # Settings form (not used in dashboard, duplicated)
+│   │   ├── MenuBar.tsx            # Menu bar (not used)
+│   │   ├── TranscriptionOverlay.tsx # Overlay layer (not used)
+│   │   └── dashboard/             # Dashboard window pages
+│   │       ├── Dashboard.tsx      # Main layout + router (Sidebar + page content)
+│   │       ├── HomePage.tsx       # Statistics display
+│   │       ├── HistoryPage.tsx    # Transcription history with search/delete
+│   │       ├── DictionaryPage.tsx # Word replacement dictionary
+│   │       ├── SettingsPage.tsx   # Configuration (transcription engine, hotkey, etc)
+│   │       └── Sidebar.tsx        # Navigation tabs
+│   ├── hooks/              # React hooks (likely empty or unused)
+│   ├── icons/              # SVG icon components
+│   └── assets/             # Static assets (if any)
+│
+├── src-tauri/              # Rust backend (Tauri app)
+│   ├── Cargo.toml          # Rust dependencies (whisper-rs, cpal, voxtral FFI, etc)
+│   ├── Cargo.lock
+│   ├── tauri.conf.json     # Tauri app config (windows, permissions, tray menu)
+│   │
+│   ├── src/                # Rust source
+│   │   ├── main.rs         # Binary entry (calls lib::run())
+│   │   ├── lib.rs          # Command handlers, AppState, window setup
+│   │   │                   #   - setup_dictation_panel() for macOS NSPanel conversion
+│   │   │                   #   - start_recording(), stop_recording() commands
+│   │   │                   #   - Event emission setup
+│   │   │
+│   │   ├── audio/          # Audio capture and VAD (Voice Activity Detection)
+│   │   │   ├── mod.rs      # Module exports
+│   │   │   ├── capture.rs  # cpal-based audio stream, frame chunking, PCM preparation
+│   │   │   └── vad.rs      # Silero VAD model (silence detection)
+│   │   │
+│   │   ├── transcription/  # Transcription engine selection and models
+│   │   │   ├── mod.rs      # ModelInfo, CoremlStatus, MetalStatus, VoxtralStatus structs
+│   │   │   ├── whisper.rs  # Whisper.cpp streaming + state cache (ggml models)
+│   │   │   ├── cloud.rs    # Cloud transcription provider support (stub)
+│   │   │   ├── voxtral.rs  # Voxtral wrapper (feature-gated, faster streaming)
+│   │   │   └── voxtral_ffi.rs # FFI bindings to Voxtral C library
+│   │   │
+│   │   ├── settings/       # User settings persistence
+│   │   │   └── mod.rs      # UserSettings struct, load/save to ~/.config/mentascribe/settings.json
+│   │   │
+│   │   ├── hotkey/         # Global hotkey system
+│   │   │   └── mod.rs      # tauri-plugin-global-shortcut, F1-F12 key parsing, hotkey-pressed/released events
+│   │   │
+│   │   ├── injection/      # Text injection into active app
+│   │   │   └── mod.rs      # Platform-specific (macOS: CGEvent paste, Linux: X11)
+│   │   │
+│   │   ├── history/        # Transcription history persistence
+│   │   │   └── mod.rs      # TranscriptionEntry struct, load/save to ~/.config/mentascribe/history.json
+│   │   │
+│   │   ├── dictionary/     # Word replacement dictionary
+│   │   │   └── mod.rs      # DictionaryEntry struct, persistence (stub implementation)
+│   │   │
+│   │   ├── stats/          # Usage statistics
+│   │   │   └── mod.rs      # LocalStats struct, track daily transcriptions/words/audio_seconds
+│   │   │
+│   │   ├── text/           # Text utilities
+│   │   │   └── mod.rs      # cleanup_text() (remove filler words, add punctuation)
+│   │   │
+│   │   └── api/            # API client layer (unused, for future cloud integrations)
+│   │       ├── mod.rs      # AuthToken, UserInfo structs
+│   │       └── client.rs   # HTTP client skeleton
+│   │
+│   ├── voxtral/            # Voxtral model/library directory (feature-gated)
+│   │   └── [voxtral build artifacts]
+│   │
+│   ├── icons/              # App icon files (macOS, Windows, Linux)
+│   ├── capabilities/       # Tauri capabilities (permissions)
+│   └── gen/                # Generated schemas, types
+
+└── .planning/              # GSD planning docs
+    └── codebase/           # This directory
+        ├── ARCHITECTURE.md # (you are here)
+        ├── STRUCTURE.md
+        ├── CONVENTIONS.md
+        ├── TESTING.md
+        └── CONCERNS.md
 ```
 
 ## Directory Purposes
 
-**src/**
-- Purpose: All frontend React/TypeScript code
-- Contains: Components, stores, types, styles
-- Key files: `App.tsx` (root), `DictationBar.tsx` (overlay UI), `store.ts` (state)
+**Frontend (src/):**
+- Purpose: React user interface, state management, event listeners
+- Contains: TSX/TS components, Zustand stores, Tauri API wrappers
+- Key files: `App.tsx` (router), `components/DictationBar.tsx` (overlay), `components/dashboard/Dashboard.tsx` (settings window)
 
-**src/components/**
-- Purpose: Reusable UI components
-- Contains: React functional components (.tsx)
-- Key files: `DictationBar.tsx` (main overlay), `dashboard/*` (settings/history/stats pages)
+**Backend (src-tauri/src/):**
+- Purpose: Core logic (audio, transcription, settings, hotkey, injection)
+- Contains: Rust modules for each domain concern
+- Key files: `lib.rs` (command handlers, AppState), `audio/capture.rs`, `transcription/whisper.rs`
 
-**src/components/dashboard/**
-- Purpose: Dashboard window UI (settings, history, stats, dictionary)
-- Contains: Page components for each dashboard section
-- Key files: `Dashboard.tsx` (router), `SettingsPage.tsx` (all settings), `HistoryPage.tsx` (past transcriptions)
+**Configuration (src-tauri/):**
+- Purpose: Build and runtime config
+- Contains: Cargo.toml, tauri.conf.json
+- Key files: `Cargo.toml` (dependencies), `tauri.conf.json` (app config, window definition, tray menu)
 
-**src/lib/**
-- Purpose: Utility functions and state management
-- Contains: Zustand stores, Tauri API wrappers, theme provider
-- Key files: `store.ts` (settings store), `historyStore.ts` (history state), `tauri.ts` (invoke wrappers)
-
-**src/styles/**
-- Purpose: Global CSS
-- Contains: Tailwind directives, global styles
-- Key files: `globals.css` (main stylesheet)
-
-**src/types/**
-- Purpose: Shared TypeScript types
-- Contains: Interfaces for settings, components, pages
-- Key files: `index.ts` (all exported types)
-
-**src-tauri/src/**
-- Purpose: All Rust backend code
-- Contains: Audio, transcription, window management, settings, persistence
-- Key files: `lib.rs` (app initialization), `audio/capture.rs` (CPAL integration)
-
-**src-tauri/src/audio/**
-- Purpose: Audio input capture and pre-processing
-- Contains: CPAL stream setup, resampling to 16kHz mono for Whisper, VAD triggering
-- Key files: `capture.rs` (main logic), `vad.rs` (voice detection)
-
-**src-tauri/src/transcription/**
-- Purpose: Speech-to-text engines
-- Contains: Local Whisper integration, cloud API wrappers
-- Key files: `whisper.rs` (whisper-rs calls), `cloud.rs` (external APIs)
-
-**src-tauri/src/injection/**
-- Purpose: Text injection into focused application
-- Contains: Platform-specific implementations (macOS CoreGraphics, Windows Win32, Linux X11)
-- Key files: `mod.rs` (public inject_text function, platform gates)
-
-**src-tauri/src/settings/**
-- Purpose: User settings persistence and access
-- Contains: Serde structs for all settings, disk I/O
-- Key files: `mod.rs` (load/save from ~/.config/mentascribe/settings.json)
-
-**src-tauri/src/history/**
-- Purpose: Transcription history storage
-- Contains: TranscriptionEntry struct, disk persistence
-- Key files: `mod.rs` (add_entry, get_all, delete_entry functions)
-
-**src-tauri/src/dictionary/**
-- Purpose: Text replacements (custom words/abbreviations)
-- Contains: Dictionary loading, replacement logic
-- Key files: `mod.rs` (apply_replacements function)
-
-**src-tauri/src/stats/**
-- Purpose: User statistics (words transcribed, time spent, etc.)
-- Contains: Recording stats persistence
-- Key files: `mod.rs` (record_transcription function)
+**Assets (src-tauri/icons/):**
+- Purpose: App icons for macOS, Windows, Linux
+- Contains: PNG, ICNS, ICO files
+- Generated by Tauri
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/main.tsx`: React app mount
-- `src/App.tsx`: Root component, window type detection, event setup
-- `src-tauri/src/main.rs`: Rust binary (calls lib::run)
-- `src-tauri/src/lib.rs`: Tauri app initialization, all commands, window creation
+- `src/main.tsx`: React app mount point
+- `src-tauri/src/main.rs`: Rust binary entry (minimal, calls `lib::run()`)
+- `src-tauri/src/lib.rs`: Tauri app setup, command registration
 
-**Configuration:**
-- `vite.config.ts`: Frontend bundling
-- `tsconfig.json`: TypeScript settings
-- `src-tauri/Cargo.toml`: Rust dependencies
-- `src-tauri/tauri.conf.json`: Tauri window/resource config
+**Frontend Components:**
+- `src/components/DictationBar.tsx`: Fullscreen overlay pill (waveform, recording state, error display)
+- `src/components/dashboard/Dashboard.tsx`: Settings window main layout
+- `src/components/dashboard/SettingsPage.tsx`: Hotkey, engine, opacity configuration UI
 
-**Core Logic:**
-- `src-tauri/src/audio/capture.rs`: CPAL audio stream, sample buffering
-- `src-tauri/src/transcription/whisper.rs`: Whisper transcription
-- `src-tauri/src/injection/mod.rs`: Text injection to focused app
+**Backend Modules:**
+- `src-tauri/src/audio/capture.rs`: Audio stream + frame handling
+- `src-tauri/src/transcription/whisper.rs`: Whisper streaming engine + model caching
+- `src-tauri/src/injection/mod.rs`: Text injection (platform-specific)
 - `src-tauri/src/hotkey/mod.rs`: Global hotkey registration
 
-**State Management:**
-- `src/lib/store.ts`: Zustand settings store (main state)
-- `src-tauri/src/lib.rs`: AppState Mutex<> (recording flag, settings in-memory copy)
-- `~/.config/mentascribe/settings.json`: Settings persistence
+**State & Config:**
+- `src/lib/store.ts`: Zustand settings store (frontend)
+- `src-tauri/src/settings/mod.rs`: Settings persistence (backend, JSON file)
+- `src/config/widget.ts`: Animation/timing constants (centralized)
 
-**UI Components:**
-- `src/components/DictationBar.tsx`: Main overlay (waveform, record button)
-- `src/components/dashboard/Dashboard.tsx`: Settings/history/stats router
-- `src/components/dashboard/SettingsPage.tsx`: All user settings UI
-
-**Data Storage:**
-- `~/.config/mentascribe/settings.json`: User configuration
-- `~/.config/mentascribe/history.json`: Transcription records
-- `~/.config/mentascribe/dictionary.json`: Text replacements
-- `~/.config/mentascribe/stats.json`: Usage statistics
+**Types & Interfaces:**
+- `src/types/index.ts`: Frontend TypeScript interfaces (DashboardPage, TranscriptionEntry, DictionaryEntry, LocalStats)
+- `src-tauri/src/transcription/mod.rs`: ModelInfo, CoremlStatus, MetalStatus, VoxtralStatus (backend structs)
 
 ## Naming Conventions
 
 **Files:**
-- React components: PascalCase (e.g., `DictationBar.tsx`, `SettingsPage.tsx`)
-- Stores/utilities: camelCase (e.g., `store.ts`, `historyStore.ts`, `tauri.ts`)
-- Rust modules: snake_case (e.g., `audio.rs`, `injection.rs`, `vad.rs`)
-- Directories: lowercase (e.g., `components/`, `lib/`, `audio/`)
+- Components: `PascalCase.tsx` (e.g., `DictationBar.tsx`, `Dashboard.tsx`)
+- Utilities/modules: `camelCase.ts` (e.g., `store.ts`, `widget.ts`)
+- Rust modules: `snake_case.rs` (e.g., `capture.rs`, `whisper.rs`)
+- Test files: `*.test.ts` or `*.spec.ts` (see TESTING.md)
 
-**Functions:**
-- Rust: snake_case (e.g., `start_capture()`, `apply_replacements()`)
-- TypeScript: camelCase (e.g., `startRecording()`, `saveToHistory()`)
+**Directories:**
+- Component groups: `camelCase/` (e.g., `components/dashboard/`)
+- Rust modules: `snake_case/` (e.g., `src-tauri/src/audio/`)
+- Config: `config/` (top-level, centralized)
+- Utilities: `lib/` (shared helpers)
 
-**Variables:**
-- Rust: snake_case for all (e.g., `is_recording`, `sample_rate`, `audio_buffer`)
-- TypeScript: camelCase (e.g., `isRecording`, `audioLevel`, `waveformBars`)
-- React state: camelCase (e.g., `const [isRecording, setIsRecording]`)
+**TypeScript:**
+- Interfaces: `PascalCase` (e.g., `UserSettings`, `TranscriptionEntry`)
+- Functions: `camelCase` (e.g., `startRecording()`, `loadSettings()`)
+- Constants: `UPPER_SNAKE_CASE` (e.g., `WAVEFORM_BAR_COUNT`, `ERROR_TIMEOUT_MS`)
 
-**Types:**
-- Rust structs: PascalCase (e.g., `AudioData`, `UserSettings`, `TranscriptionEntry`)
-- TypeScript interfaces: PascalCase (e.g., `UserSettings`, `DictationBarProps`)
-- TypeScript types (union/enums): PascalCase (e.g., `WindowType`, `DashboardPage`)
+**Rust:**
+- Structs: `PascalCase` (e.g., `UserSettings`, `ModelCache`)
+- Functions: `snake_case` (e.g., `start_recording()`, `get_models_dir()`)
+- Constants: `UPPER_SNAKE_CASE` (e.g., `MODEL_BASE_URL`, `MAX_UTF16_UNITS_PER_EVENT`)
+- Enums: `PascalCase` variants (e.g., `HotkeyError::RegisterError`)
 
 ## Where to Add New Code
 
-**New Feature (e.g., speech enhancement):**
-- Primary code: `src-tauri/src/audio/[new_module].rs`
-- Frontend trigger: `src/components/dashboard/SettingsPage.tsx` (add toggle)
-- Settings struct: `src-tauri/src/settings/mod.rs` (add field to AudioSettings or new sub-struct)
-- Command: `src-tauri/src/lib.rs` (add new #[tauri::command])
+**New Feature (End-to-End):**
+- Create command in `src-tauri/src/lib.rs` decorated with `#[tauri::command]`
+- Create wrapper in `src/lib/tauri.ts` or call `invoke()` directly in component
+- Create UI component in `src/components/` or add to existing page
+- Create Zustand store in `src/lib/` if stateful
+- Add tests to `src-tauri/src/[module].rs` (#[cfg(test)])
 
 **New Component/Module:**
-- React component: `src/components/[ComponentName].tsx`
-- Page in dashboard: `src/components/dashboard/[PageName].tsx`
-- Export from: `src/components/index.ts` (if creating barrel export)
+- Frontend: Create file in `src/components/` with `.tsx` extension
+- Backend: Create module in `src-tauri/src/[domain]/mod.rs` and declare in `src-tauri/src/lib.rs` with `mod [domain]`
+- Export public items via `pub` keyword
+- Maintain separation of concerns: UI in frontend, logic in backend
 
 **Utilities:**
-- Frontend helpers: `src/lib/[utilName].ts` (avoid mixing in stores)
-- Rust helpers: `src-tauri/src/[domain]/[helper].rs` (within domain module)
-- Shared types: `src/types/index.ts` (frontend) or `src-tauri/src/[domain]/mod.rs` (backend)
+- Shared constants: `src/config/[domain].ts` (e.g., widget.ts for UI timing)
+- Shared types: `src/types/index.ts`
+- Tauri command wrappers: `src/lib/tauri.ts` (optional, can invoke directly)
+- Rust helpers: `src-tauri/src/[module]/mod.rs` as free functions
+
+**Stores/State:**
+- Frontend reactive state: Zustand store in `src/lib/[domain]Store.ts`
+- Backend persistent state: JSON file in `~/.config/mentascribe/` with load/save functions in `src-tauri/src/[domain]/mod.rs`
+- Transient state: React component state via `useState()`
 
 **Tests:**
-- Frontend tests: Co-locate as `[ComponentName].test.tsx` or in `src/__tests__/` (not yet configured)
-- Rust tests: Inline with `#[cfg(test)]` modules in same file or `tests/` directory (not yet used)
-
-**Styling:**
-- Global styles: `src/styles/globals.css`
-- Component-scoped: Tailwind classes in JSX (no separate CSS files currently used)
-- Theme: `src/lib/theme.tsx` (light/dark provider)
+- Unit tests: Inline in `src-tauri/src/[module].rs` in `#[cfg(test)]` blocks
+- Component tests: Create `[Component].test.tsx` co-located with component
+- Integration tests: Create `tests/` directory with end-to-end scenarios
 
 ## Special Directories
 
-**dist/**
-- Purpose: Built frontend (output from vite build)
-- Generated: Yes
-- Committed: No (in .gitignore)
+**Frontend:**
+- `src/styles/`: Global CSS and Tailwind directives (not component-scoped)
+- `src/icons/`: SVG icon components (reusable across pages)
+- `src/hooks/`: Custom React hooks (currently sparse)
 
-**node_modules/**
-- Purpose: Frontend dependency packages
-- Generated: Yes (npm install)
-- Committed: No (in .gitignore)
+**Backend:**
+- `src-tauri/voxtral/`: Voxtral C library and FFI bindings (feature-gated, large binary)
+- `src-tauri/icons/`: App icons (ICNS, ICO, PNG) — generated by `cargo tauri icon` command
+- `src-tauri/gen/`: Tauri-generated schemas and TypeScript bindings (auto-generated, do not edit)
+- `src-tauri/capabilities/`: Tauri v2 capability definitions (permissions)
 
-**src-tauri/target/**
-- Purpose: Rust build artifacts
-- Generated: Yes (cargo build)
-- Committed: No (in .gitignore)
+**Data Storage (User Home):**
+- `~/.mentascribe/models/`: Whisper GGML models (ggml-tiny.bin, ggml-small.bin, etc) + optional CoreML encoders
+- `~/.config/mentascribe/`: Settings, history, and dictionary JSON files
+  - `settings.json`: User preferences (engine, hotkey, opacity, etc)
+  - `history.json`: Transcription entries (max 500)
+  - `dictionary.json`: Word replacement entries
 
-**.planning/codebase/**
-- Purpose: GSD analysis documents (ARCHITECTURE.md, STRUCTURE.md, etc.)
-- Generated: No (manually maintained)
-- Committed: Yes
+**Build Artifacts:**
+- `dist/`: Frontend build output (Vite)
+- `src-tauri/target/`: Rust build output (Cargo)
+- `.planning/codebase/`: GSD codebase mapping docs (not committed to dist)
 
-**~/.config/mentascribe/**
-- Purpose: User data (settings, history, dictionary, stats)
-- Location: Outside repo (user's home directory)
-- Generated: Yes (at runtime)
-- Committed: No
+## Patterns by Module
 
-## Cross-Platform File Handling
+**Audio Capture:**
+- `src-tauri/src/audio/capture.rs`: Starts cpal stream, feeds frames to VAD filter, emits audio-level events
+- Pattern: `start_capture()` → `AUDIO_STREAM.set()` → callback emits events
 
-**Settings location:** `~/.config/mentascribe/settings.json` (XDG_CONFIG_HOME on Linux, ~/Library/Preferences on macOS)
-- Via `dirs::config_dir()` in Rust (automatically platform-aware)
+**Transcription Selection:**
+- `src-tauri/src/lib.rs::start_recording()` checks `settings.transcription.engine`
+- Pattern: if engine == "voxtral" → call `voxtral::start_streaming()`, else → call `whisper::start_streaming()`
 
-**Audio input:** Handled via CPAL device selection (automatic best-match device)
+**Settings Sync:**
+- Frontend: User changes setting → `updateSettings()` calls `invoke('update_settings')`
+- Backend: `update_settings` command locks Mutex, writes JSON, re-registers hotkey if needed, emits `settings-changed` event
+- Pattern: Dual source of truth, strong consistency via Mutex + JSON file
 
-**Text injection:** Platform-specific implementations in `injection/mod.rs`
-- macOS: CoreGraphics CGEvent with Unicode string splitting (20-char limit)
-- Windows: Windows API via windows crate
-- Linux: X11 xtest via x11 crate
-
-## Tauri Window Architecture
-
-**Two windows defined in src-tauri/tauri.conf.json:**
-1. **Dictation window** (label: "dictation")
-   - Role: Fullscreen overlay
-   - Converted to NSPanel on macOS via `setup_dictation_panel()`
-   - Position: Bottom-center of current monitor, non-activating
-   - Draggable: Controlled by settings, toggled via JS in DictationBar
-
-2. **Dashboard window** (label: "dashboard")
-   - Role: Settings, history, stats, dictionary
-   - Always-on-top on Windows/Linux, brought to foreground on macOS
-   - URL routes via hash: `#dashboard/settings`, `#dashboard/history`, etc.
-
-**Window communication:**
-- Both windows share same app context
-- Events broadcasted across windows via `app.emit()`
-- Settings changes in one window propagated to other via "settings-changed" event
+**Window Management:**
+- Dictation window: Created in `lib.rs::run()`, converted to NSPanel in `setup_dictation_panel()`
+- Dashboard window: Created with tray menu "Settings" action
+- Pattern: Two independent Tauri WebviewWindows, separate HTML load paths (`#dictation` vs `#dashboard`)
 
 ---
 
-*Structure analysis: 2026-02-20*
+*Structure analysis: 2026-02-24*

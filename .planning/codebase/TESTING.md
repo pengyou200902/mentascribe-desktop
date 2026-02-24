@@ -1,331 +1,365 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-02-20
+**Analysis Date:** 2026-02-24
 
 ## Test Framework
 
-**Runner:**
-- Rust: `cargo test` (built-in Rust testing)
-- TypeScript/React: Not configured — no Jest, Vitest, or other JavaScript test runner
+**Status:** Not detected
 
-**Assertion Library:**
-- Rust: `assert_eq!()`, `assert!()` macros (standard library)
-- TypeScript/React: Not applicable (no test framework)
+No test framework is installed or configured in this codebase. The project currently has:
+- No `jest.config.*` or `vitest.config.*` file
+- No test dependencies in `package.json`
+- No test files (`*.test.ts`, `*.spec.ts`, etc.) in the codebase
+- No test scripts in `package.json` (only `dev`, `build`, `lint`, `format`, `typecheck`)
 
-**Run Commands:**
+**Recommendation:** To add testing, configure either:
+- **Vitest** (lightweight, Vite-native)
+- **Jest** (industry standard, needs extra config for Tauri)
+
+## Run Commands
+
+Current available commands:
 ```bash
-# Rust tests
-cargo test                 # Run all Rust tests
-cargo test -- --nocapture # Run with println! output visible
-cargo test text::tests     # Run specific test module
+npm run dev              # Start Vite dev server
+npm run build            # Build frontend and run tsc type check
+npm run preview          # Preview production build
+npm run lint             # Check code with ESLint
+npm run lint:fix         # Auto-fix ESLint issues
+npm run format           # Auto-format with Prettier
+npm run typecheck        # Run tsc type checking only
+```
 
-# TypeScript type checking
-npm run typecheck         # Type check all TypeScript files (no runtime tests)
-
-# Linting (code quality, not testing)
-npm run lint              # Check for linting errors
-npm run lint:fix          # Auto-fix linting errors
-
-# Formatting
-npm run format            # Format code with Prettier
+To add tests, commands would need to be added:
+```bash
+# Proposed (not yet configured)
+npm run test             # Run all tests
+npm run test:watch      # Watch mode
+npm run test:ui         # UI browser dashboard
+npm run test:coverage   # Generate coverage report
 ```
 
 ## Test File Organization
 
-**Location:**
-- Rust: Co-located with implementation
-  - Pattern: `#[cfg(test)] mod tests { ... }` in same `.rs` file as implementation
-  - Example: `src-tauri/src/text/mod.rs` contains `mod tests` at bottom
+**Current structure:** Not applicable (no test files)
+
+**Recommended approach for new tests:**
+
+**Location:** Co-located pattern
+- Tests next to source files (Vitest/Jest default)
+- Store tests: `src/lib/historyStore.test.ts` next to `src/lib/historyStore.ts`
+- Component tests: `src/components/DictationBar.test.tsx` next to `src/components/DictationBar.tsx`
+- Utilities: `src/lib/tauri.test.ts` next to `src/lib/tauri.ts`
 
 **Naming:**
-- Rust test modules: `tests { ... }` block
-- Rust test functions: `#[test] fn test_<feature>() { ... }`
-- Pattern: `test_capitalize_sentences()`, `test_process_text_enabled()`
+- `*.test.ts` or `*.test.tsx` (matches TypeScript file type)
+- Not `*.spec.ts` (codebase uses test terminology)
 
 **Structure:**
 ```
-src-tauri/src/
-├── text/
-│   └── mod.rs (contains implementation + #[cfg(test)] mod tests)
-├── audio/
-│   └── capture.rs (no tests currently)
-└── [other modules]
+src/
+├── components/
+│   ├── DictationBar.tsx
+│   ├── DictationBar.test.tsx
+│   └── ...
+├── lib/
+│   ├── historyStore.ts
+│   ├── historyStore.test.ts
+│   └── ...
+└── types/
+    └── index.ts
 ```
 
 ## Test Structure
 
-**Rust Test Suite Organization:**
-
-From `src-tauri/src/text/mod.rs`:
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_capitalize_sentences() {
-        assert_eq!(
-            capitalize_sentences("hello world"),
-            "Hello world"
-        );
-        assert_eq!(
-            capitalize_sentences("hello. how are you"),
-            "Hello. How are you"
-        );
-    }
-
-    #[test]
-    fn test_process_text_enabled() {
-        assert_eq!(
-            process_text("hello world", true),
-            "Hello world"
-        );
-    }
-}
-```
-
-**Patterns:**
-- Each test function tests one scenario or feature
-- Input-output assertions verify expected behavior
-- Multiple assertions within single test for related conditions
-- `use super::*;` imports private functions for testing
-
-## Mocking
-
-**Framework:** Not used in current codebase
-
-**Patterns:**
-- Rust: No mocking library detected (no `mockall`, `mock`, or `double` dependencies)
-- TypeScript: No mocking framework configured (no Jest mocks, Vitest mocks, or Sinon)
-
-**Current Approach:**
-- Unit tests in Rust test pure functions directly
-- Integration with external APIs (Tauri invokes, HTTP requests) not tested in automated tests
-- Manual testing of frontend-backend integration via app execution
-
-**What to Mock (if testing framework added):**
-- Tauri `invoke()` calls in React components
-- API responses from cloud providers
-- File I/O operations
-- System audio/input/output
-
-**What NOT to Mock:**
-- Pure utility functions (test with actual implementation)
-- String processing logic (test with real inputs)
-- Data type conversions (use concrete examples)
-
-## Fixtures and Factories
-
-**Test Data:**
-- Rust tests use inline literal values:
-  ```rust
-  #[test]
-  fn test_capitalize_sentences() {
-      assert_eq!(
-          capitalize_sentences("hello world"),
-          "Hello world"
-      );
-  }
-  ```
-- No shared fixtures or factories detected
-- Test inputs are small, isolated strings and booleans
-
-**Location:**
-- Same file as tests, within `#[cfg(test)] mod tests { ... }`
-- No separate fixture/factory files
-
-## Coverage
-
-**Requirements:** None enforced
-
-**Current State:**
-- Rust: Minimal coverage (only `text/mod.rs` contains tests)
-  - Untested modules: `audio/`, `transcription/`, `injection/`, `hotkey/`, `history/`, `dictionary/`, `api/`, `settings/`
-  - Reason: Complex platform-specific code (audio capture, FFI, NSPanel), cloud APIs
-- TypeScript/React: No tests (no test runner configured)
-
-**View Coverage:**
-```bash
-# Rust coverage requires additional setup (cargo-tarpaulin)
-# Not currently configured in this project
-```
-
-**Modules with No Tests:**
-- `src-tauri/src/audio/` - audio capture, complex CPAL integration
-- `src-tauri/src/transcription/` - Whisper models, cloud APIs
-- `src-tauri/src/injection/` - platform-specific text injection (macOS/Windows/Linux)
-- `src-tauri/src/hotkey/` - global hotkey registration
-- `src-tauri/src/settings/` - file I/O and serialization
-- `src-tauri/src/api/` - HTTP client and auth
-- `src-tauri/src/history/` - database operations
-- `src-tauri/src/dictionary/` - data persistence
-- `src/` (all React/TypeScript) - no test framework
-
-## Test Types
-
-**Unit Tests:**
-- **Scope:** Single pure functions with no side effects
-- **Approach:** Direct assertion of input-output pairs
-- **Examples:** `text/mod.rs` tests for `capitalize_sentences()`, `process_text()`
-- **Current coverage:** Only simple utility functions in text processing
-
-**Integration Tests:**
-- **Scope:** Interactions between modules or with external systems
-- **Approach:** Not implemented; would require:
-  - Mocking Tauri invokes in React components
-  - Testing audio capture + transcription pipeline end-to-end
-  - Testing settings persistence + loading
-- **Needed for:** Verifying recording + transcription + injection flow
-
-**E2E Tests:**
-- **Framework:** Not used
-- **Alternative:** Manual testing via running the app and using keyboard shortcuts
-- **Coverage needed:** Full user workflows (record → transcribe → inject text)
-
-## Common Patterns
-
-**Rust Unit Test Pattern:**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_capitalize_sentences() {
-        // Arrange
-        let input = "hello world";
-
-        // Act
-        let result = capitalize_sentences(input);
-
-        // Assert
-        assert_eq!(result, "Hello world");
-    }
-
-    #[test]
-    fn test_process_text_disabled() {
-        // When processing is disabled, return input unchanged
-        assert_eq!(
-            process_text("hello world", false),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn test_process_text_enabled() {
-        // When processing is enabled, apply transformations
-        assert_eq!(
-            process_text("hello world", true),
-            "Hello world"
-        );
-    }
-}
-```
-
-**Assertion Examples:**
-
-```rust
-// Simple equality
-assert_eq!(actual, expected);
-
-// Boolean assertions
-assert!(condition, "optional message");
-assert!(!condition);
-
-// String comparisons
-assert_eq!(result, "expected string");
-
-// Multiple assertions in one test (related scenarios)
-assert_eq!(test_func("input1"), "output1");
-assert_eq!(test_func("input2"), "output2");
-```
-
-**Async Testing in React (if Jest were added):**
+**Proposed suite organization (based on codebase patterns):**
 
 ```typescript
-// Pattern that would be used
-test('loads settings on mount', async () => {
-  const { getByText } = render(<App />);
-  await waitFor(() => {
-    expect(getByText('loaded')).toBeInTheDocument();
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useHistoryStore } from './historyStore';
+
+describe('useHistoryStore', () => {
+  beforeEach(() => {
+    // Reset store before each test
+    vi.clearAllMocks();
+  });
+
+  describe('loadHistory', () => {
+    it('should load history entries from Rust backend', async () => {
+      // Test implementation
+    });
+
+    it('should set isLoading state correctly', async () => {
+      // Test implementation
+    });
+  });
+
+  describe('error handling', () => {
+    it('should set error state on invoke failure', async () => {
+      // Test implementation
+    });
   });
 });
 ```
 
+**Patterns to follow:**
+
+- **Setup:** `beforeEach()` to reset mocks and state
+- **Teardown:** `afterEach()` for cleanup (Vitest auto-cleans in most cases)
+- **Assertions:** Use `expect()` API, matching existing TypeScript style
+- **Group related tests:** Describe blocks for features/methods
+
+## Mocking
+
+**Framework:** Vitest has built-in mocking via `vi` (from Vitest)
+
+**Patterns:**
+
+Mock Tauri invoke calls:
+```typescript
+import { describe, it, expect, vi } from 'vitest';
+import * as tauriCore from '@tauri-apps/api/core';
+
+describe('historyStore', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(tauriCore, 'invoke').mockResolvedValue({
+      entries: [],
+      total: 0,
+    });
+  });
+
+  it('should invoke get_history with correct parameters', async () => {
+    const { result } = renderHook(() => useHistoryStore());
+    await act(async () => {
+      await result.current.loadHistory();
+    });
+    expect(tauriCore.invoke).toHaveBeenCalledWith('get_history', {
+      limit: 50,
+      offset: 0,
+    });
+  });
+});
+```
+
+Mock React components:
+```typescript
+vi.mock('./components/DictationBar', () => ({
+  DictationBar: ({ isRecording }) => (
+    <div data-testid="dictation-bar">{isRecording ? 'Recording' : 'Idle'}</div>
+  ),
+}));
+```
+
+**What to Mock:**
+- Tauri `invoke()` calls — return predictable data
+- Event listeners (`listen()`) — simulate events
+- Component children or external dependencies
+- Time-dependent functions (`setTimeout`, `Date.now()`)
+
+**What NOT to Mock:**
+- Store implementation details — test the public API
+- Zustand state management — use real stores in tests
+- TypeScript type definitions
+- Internal utility functions (test them directly)
+
+## Fixtures and Factories
+
+**Pattern (proposed):**
+
+Create test data factories in `src/__tests__/fixtures/` or alongside tests:
+
+```typescript
+// src/lib/historyStore.test.ts or src/__tests__/fixtures/history.ts
+export const createMockTranscriptionEntry = (overrides = {}): TranscriptionEntry => ({
+  id: 'test-id-123',
+  text: 'Hello world',
+  word_count: 2,
+  duration_ms: 500,
+  timestamp: new Date().toISOString(),
+  synced: false,
+  ...overrides,
+});
+
+export const mockHistoryResponse = {
+  entries: [
+    createMockTranscriptionEntry(),
+    createMockTranscriptionEntry({ text: 'Second entry' }),
+  ],
+  totalCount: 2,
+};
+```
+
+**Location:** Test files themselves or dedicated `__tests__/fixtures/` directory
+
+**Usage:**
+```typescript
+it('should filter silent audio', () => {
+  const silent = createMockTranscriptionEntry({ text: '' });
+  expect(isSilentAudio(silent.text)).toBe(true);
+});
+```
+
+## Coverage
+
+**Requirements:** Not enforced (no coverage reporting configured)
+
+**View Coverage (proposed):**
+```bash
+npm run test:coverage   # Would generate coverage/ directory with HTML report
+npm run test:ui         # Browser-based coverage dashboard
+```
+
+**Target (recommended):**
+- Store logic: >= 80% coverage (critical path)
+- Components: >= 60% coverage (visual logic harder to test)
+- Utilities: >= 90% coverage (pure functions)
+- Tauri integration: minimal (mocked, hard to test real invocation)
+
+## Test Types
+
+**Unit Tests:**
+
+Scope: Individual functions, stores, or small components
+- Store methods: Test state mutations, invoke parameters, error handling
+- Utilities: Test transformation, validation logic
+- Examples: `historyStore.test.ts`, `tauri.test.ts`
+
+Approach:
+```typescript
+it('should delete entry from store', async () => {
+  const { result } = renderHook(() => useHistoryStore());
+  // Setup initial state
+  act(() => {
+    result.current.entries = [{ id: '1', text: 'Test' }];
+  });
+  // Call action
+  await act(async () => {
+    await result.current.deleteEntry('1');
+  });
+  // Assert
+  expect(result.current.entries).toHaveLength(0);
+});
+```
+
+**Integration Tests:**
+
+Scope: Multiple components or store + Tauri interaction
+- Component + store interaction
+- Event listeners + state updates
+- Mock Tauri commands, test the flow
+
+Approach:
+```typescript
+it('should load history on mount and display entries', async () => {
+  vi.spyOn(tauriCore, 'invoke').mockResolvedValue({
+    /* mock data */
+  });
+  render(<HistoryPage />);
+  await waitFor(() => {
+    expect(screen.getByText(/test entry/i)).toBeInTheDocument();
+  });
+});
+```
+
+**E2E Tests:**
+
+Status: Not configured
+
+Would require end-to-end test framework (Playwright, Cypress). Not typically used with Tauri desktop apps at this stage.
+
+## Common Patterns
+
+**Async Testing:**
+
+```typescript
+import { describe, it, expect } from 'vitest';
+
+it('should handle async state updates', async () => {
+  const { result } = renderHook(() => useHistoryStore());
+
+  // Set loading state
+  expect(result.current.isLoading).toBe(false);
+
+  // Trigger async action
+  const promise = result.current.loadHistory();
+  expect(result.current.isLoading).toBe(true); // Optimistic update
+
+  // Wait for completion
+  await promise;
+  expect(result.current.isLoading).toBe(false);
+  expect(result.current.entries).toHaveLength(1);
+});
+```
+
+Pattern:
+- Mock `invoke()` to return resolved promise
+- Use `await act(async () => { ... })` to apply state updates
+- Wait for state changes with `waitFor()` or direct await
+
 **Error Testing:**
 
-```rust
-#[test]
-fn test_error_handling() {
-    // Test that function returns appropriate error
-    let result = some_fallible_function();
-    assert!(result.is_err());
-}
+```typescript
+it('should handle invoke errors', async () => {
+  vi.spyOn(tauriCore, 'invoke').mockRejectedValue(new Error('Network error'));
+
+  const { result } = renderHook(() => useHistoryStore());
+
+  await act(async () => {
+    await result.current.loadHistory();
+  });
+
+  expect(result.current.error).toBe('Error: Network error');
+  expect(result.current.entries).toEqual([]);
+});
 ```
 
-## Missing Test Coverage
+Pattern:
+- Use `mockRejectedValue()` to simulate errors
+- Assert error state is set
+- Assert fallback state (empty arrays, null values)
+- Verify error is logged (if using `console.error`)
 
-**Critical Gaps:**
+**Component Testing:**
 
-| Component | Location | Why Not Tested | Risk |
-|-----------|----------|---|---|
-| Audio capture | `src-tauri/src/audio/capture.rs` | CPAL integration, platform-specific | Breaks in microphone scenarios |
-| Transcription pipeline | `src-tauri/src/transcription/` | Whisper model integration, large binary | Silent transcription failures |
-| Text injection | `src-tauri/src/injection/mod.rs` | macOS/Windows/Linux system APIs | Text not pasting correctly |
-| Settings persistence | `src-tauri/src/settings/mod.rs` | File I/O and JSON serialization | Settings lost on crash |
-| React components | `src/components/` | No test runner; complex Tauri FFI | UI state sync issues |
-| Event handling | `src/App.tsx` | Tauri event listeners, async orchestration | Race conditions in recording |
-| History/Dictionary | `src-tauri/src/history/`, `dictionary/` | Database operations | Data corruption or loss |
+```typescript
+import { render, screen } from '@testing-library/react';
 
-**Recommended Testing Priority (if adding tests):**
+it('should show recording state', () => {
+  render(<DictationBar isRecording={true} isProcessing={false} />);
+  expect(screen.getByTestId('waveform')).toBeInTheDocument();
+});
 
-1. **High:** Text processing utilities (already partially done) + settings persistence
-2. **High:** Audio capture pipeline (mock CPAL for basic capture flow)
-3. **Medium:** Settings load/save cycle with file I/O
-4. **Medium:** Basic React component rendering with mocked Tauri
-5. **Low:** Platform-specific injection (harder to mock, test manually)
-
-## Adding Tests
-
-**To add Jest/Vitest for React components:**
-
-```bash
-npm install --save-dev jest @testing-library/react @testing-library/jest-dom ts-jest
-npm install --save-dev vitest (alternative to Jest)
+it('should show error message', () => {
+  render(<DictationBar error="Mic busy" />);
+  expect(screen.getByText('Mic busy')).toBeInTheDocument();
+});
 ```
 
-**To add Rust test coverage:**
+Pattern:
+- Use `render()` for components
+- Query with `screen.getByTestId()`, `screen.getByText()`, etc.
+- Assert rendered output matches props
+- Use `data-testid` attributes in components for reliable selection
 
-```bash
-# View coverage with cargo-tarpaulin
-cargo install cargo-tarpaulin
-cargo tarpaulin --out Html
-```
+## Suggested Setup Path
 
-**Test Command Structure (if framework added):**
+**Phase 1: Add test infrastructure**
+1. Install Vitest: `npm install -D vitest @vitest/ui`
+2. Install testing utilities: `npm install -D @testing-library/react @testing-library/jest-dom`
+3. Create `vitest.config.ts` in project root
+4. Add test scripts to `package.json`
 
-```bash
-# Would follow this pattern
-npm test                  # Run all tests
-npm test -- --watch      # Watch mode
-npm test -- --coverage   # Coverage report
-```
+**Phase 2: Test critical paths**
+1. Zustand stores (historyStore, dictionaryStore, settingsStore)
+2. Tauri integration layer (`src/lib/tauri.ts`)
+3. Event handling in `App.tsx`
 
-## Current Test Status Summary
-
-| Language | Tests Present | Framework | Config | Recommendation |
-|----------|---|---|---|---|
-| Rust | Yes (minimal) | Built-in | None | Add for critical modules (settings, audio) |
-| TypeScript/React | No | None | None | Add Jest/Vitest for components |
-| E2E | No | None | None | Manual testing sufficient for now |
-
-**Blocking Issues for Test Expansion:**
-1. No JavaScript test framework configured (Jest/Vitest)
-2. Rust tests require careful mocking of platform-specific APIs (CPAL, NSPanel, enigo)
-3. Frontend-backend integration tests need Tauri mock layer
-4. No existing test utilities or helpers to build upon
+**Phase 3: Component tests**
+1. DictationBar (animation, state rendering)
+2. Dashboard pages (state, navigation)
+3. Forms (validation, submission)
 
 ---
 
-*Testing analysis: 2026-02-20*
+*Testing analysis: 2026-02-24*
