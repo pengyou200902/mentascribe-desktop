@@ -13,128 +13,9 @@ An open-source, cross-platform desktop dictation app — similar to [Wispr Flow]
 - **Cloud STT fallback** (optional)
 - **MentaScribe account sync** (optional, via `api.voice.mentaflux.ai`)
 
-## Tech Stack
-
-- **Framework:** Tauri 2.x (Rust backend + WebView frontend)
-- **Backend:** Rust (edition 2021)
-- **Frontend:** React 18 + TypeScript + Vite 5
-- **Styling:** Tailwind CSS 3.4
-- **State:** Zustand
-- **STT Engine:** Whisper.cpp via whisper-rs (CoreML/Metal on macOS)
-- **Audio:** cpal + rubato (resampling) + hound (WAV)
-- **Text Injection:** enigo + arboard (clipboard)
-- **Secure Storage:** keyring
-
-## Prerequisites
-
-- Node.js 20.x+
-- npm 10.x+
-- Rust 1.75+ (via rustup)
-- Platform-specific dependencies (see below)
-
-### macOS
-
-```bash
-xcode-select --install
-```
-
-The app uses macOS private APIs (`macOSPrivateApi: true`) for the NSPanel-based dictation overlay.
-
-### Windows
-
-- Visual Studio Build Tools with C++ workload
-- WebView2 (usually pre-installed on Windows 11)
-
-### Linux
-
-```bash
-# Ubuntu/Debian
-sudo apt install libwebkit2gtk-4.1-dev \
-  build-essential \
-  curl \
-  wget \
-  file \
-  libssl-dev \
-  libayatana-appindicator3-dev \
-  librsvg2-dev \
-  libasound2-dev
-```
-
-## Getting Started
-
-```bash
-# Install dependencies
-npm install
-
-# Start development (launches both Vite dev server and Tauri)
-npm run tauri dev
-
-# Build for current platform
-npm run tauri build
-```
-
-Output locations:
-- macOS: `src-tauri/target/release/bundle/dmg/`
-- Windows: `src-tauri/target/release/bundle/msi/` or `nsis/`
-- Linux: `src-tauri/target/release/bundle/appimage/`, `deb/`, `rpm/`
-
-## Project Structure
-
-```
-mentascribe-desktop/
-├── src/                          # React frontend
-│   ├── components/
-│   │   ├── dashboard/            # Dashboard window views
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── HomePage.tsx
-│   │   │   ├── HistoryPage.tsx
-│   │   │   ├── DictionaryPage.tsx
-│   │   │   ├── SettingsPage.tsx
-│   │   │   └── Sidebar.tsx
-│   │   ├── DictationBar.tsx      # Dictation overlay widget
-│   │   ├── TranscriptionOverlay.tsx
-│   │   ├── MenuBar.tsx
-│   │   ├── History.tsx
-│   │   └── Settings.tsx
-│   ├── lib/                      # State stores and utilities
-│   │   ├── store.ts              # Main settings store (Zustand)
-│   │   ├── historyStore.ts
-│   │   ├── dictionaryStore.ts
-│   │   ├── statsStore.ts
-│   │   ├── tauri.ts
-│   │   └── theme.tsx
-│   ├── config/                   # Frontend configuration
-│   ├── types/                    # TypeScript type definitions
-│   ├── icons/                    # App icons
-│   ├── styles/                   # CSS / Tailwind
-│   ├── App.tsx
-│   └── main.tsx
-├── src-tauri/                    # Rust backend
-│   ├── src/
-│   │   ├── audio/                # Audio capture, VAD
-│   │   ├── transcription/        # Whisper, cloud STT
-│   │   ├── hotkey/               # Global hotkey registration
-│   │   ├── injection/            # Text injection (enigo/clipboard)
-│   │   ├── settings/             # User preferences (persisted)
-│   │   ├── api/                  # API client (mentaflux.ai)
-│   │   ├── dictionary/           # Custom word dictionary
-│   │   ├── history/              # Transcription history
-│   │   ├── stats/                # Usage statistics
-│   │   ├── text/                 # Text processing
-│   │   ├── lib.rs                # Tauri command handlers
-│   │   └── main.rs               # Entry point
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── package.json
-├── vite.config.ts
-├── tailwind.config.js
-├── tsconfig.json
-└── tsconfig.node.json
-```
-
 ## Platform Support
 
-MentaScribe is built on Tauri and runs on macOS, Windows, and Linux. However, the experience varies by platform — macOS is the primary development target and offers the most complete feature set.
+MentaScribe runs on macOS, Windows, and Linux. macOS is the primary development target and offers the most complete feature set.
 
 | Feature | macOS | Windows | Linux |
 |---------|:-----:|:-------:|:-----:|
@@ -149,48 +30,66 @@ MentaScribe is built on Tauri and runs on macOS, Windows, and Linux. However, th
 
 **macOS** provides the best experience thanks to hardware acceleration (Neural Engine via CoreML, Metal GPU), the NSPanel-based overlay that doesn't steal focus from other apps, and native accessibility text injection. If you're choosing a platform, macOS on Apple Silicon is recommended.
 
-**Windows and Linux** support is functional — audio capture, Whisper transcription (CPU), hotkeys, clipboard/keyboard text injection, and the dashboard all work. GPU acceleration and the advanced overlay features are areas for future improvement. Feedbacks welcome!
+**Windows and Linux** support is functional — audio capture, Whisper transcription (CPU), hotkeys, clipboard/keyboard text injection, and the dashboard all work. GPU acceleration and the advanced overlay features are areas for future improvement. Contributions welcome!
 
-## App Windows
+## Getting Started
 
-The app has two windows configured in `src-tauri/tauri.conf.json`:
+### Prerequisites
 
-| Window | Purpose | Properties |
-|--------|---------|------------|
-| `dictation` | Always-on-top transcription overlay | 52x10, transparent, no decorations, skip taskbar |
-| `dashboard` | Main app with history/settings/stats | 800x600 (min 640x480), resizable, routed via `#dashboard` |
+- Node.js 20.x+
+- npm 10.x+
+- Rust 1.75+ (via rustup)
 
-## Permissions
+<details>
+<summary><strong>macOS</strong></summary>
 
-### macOS
+```bash
+xcode-select --install
+```
 
-1. **Microphone Access** — granted via system prompt
-2. **Accessibility** — must be manually enabled in System Settings → Privacy & Security → Accessibility (required for text injection)
+The app uses macOS private APIs (`macOSPrivateApi: true`) for the NSPanel-based dictation overlay.
+</details>
 
-### Windows
+<details>
+<summary><strong>Windows</strong></summary>
 
-- Microphone access via Windows privacy settings
+- Visual Studio Build Tools with C++ workload
+- WebView2 (usually pre-installed on Windows 11)
+</details>
 
-### Linux
+<details>
+<summary><strong>Linux (Ubuntu/Debian)</strong></summary>
 
-- Audio access via PulseAudio/ALSA
-- Input simulation requires X11 (xtest) or specific Wayland compositor support
+```bash
+sudo apt install libwebkit2gtk-4.1-dev \
+  build-essential \
+  curl \
+  wget \
+  file \
+  libssl-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libasound2-dev
+```
+</details>
 
-## Scripts
+### Install and Run
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start Vite frontend dev server |
-| `npm run build` | Type-check and build frontend |
-| `npm run tauri dev` | Start Tauri development (frontend + backend) |
-| `npm run tauri build` | Build for production |
-| `npm run lint` | Lint TypeScript with ESLint |
-| `npm run lint:fix` | Auto-fix lint issues |
-| `npm run format` | Format with Prettier |
-| `npm run typecheck` | Type-check without emitting |
-| `cargo test` | Run Rust tests |
-| `cargo fmt` | Format Rust code |
-| `cargo clippy` | Lint Rust code |
+```bash
+# Install dependencies
+npm install
+
+# Start development (launches both Vite dev server and Tauri)
+npm run tauri dev
+
+# Build for current platform
+npm run tauri build
+```
+
+Build output:
+- macOS: `src-tauri/target/release/bundle/dmg/`
+- Windows: `src-tauri/target/release/bundle/msi/` or `nsis/`
+- Linux: `src-tauri/target/release/bundle/appimage/`, `deb/`, `rpm/`
 
 ## Configuration
 
@@ -199,9 +98,84 @@ User settings are stored in:
 - Windows: `%APPDATA%/mentascribe/`
 - Linux: `~/.config/mentascribe/`
 
-Whisper models are downloaded to:
-- `~/.mentascribe/models/`
+Whisper models are downloaded to `~/.mentascribe/models/`.
+
+## Permissions
+
+| Platform | Requirements |
+|----------|-------------|
+| **macOS** | Microphone access (system prompt) + Accessibility (System Settings > Privacy & Security, required for text injection) |
+| **Windows** | Microphone access via Windows privacy settings |
+| **Linux** | Audio access via PulseAudio/ALSA, input simulation requires X11 (xtest) or Wayland compositor support |
+
+## App Windows
+
+| Window | Purpose | Properties |
+|--------|---------|------------|
+| `dictation` | Always-on-top transcription overlay | 52x10, transparent, no decorations, skip taskbar |
+| `dashboard` | Main app with history/settings/stats | 800x600 (min 640x480), resizable, routed via `#dashboard` |
+
+## Tech Stack
+
+- **Framework:** Tauri 2.x (Rust backend + WebView frontend)
+- **Backend:** Rust (edition 2021)
+- **Frontend:** React 18 + TypeScript + Vite 5
+- **Styling:** Tailwind CSS 3.4
+- **State:** Zustand
+- **STT Engine:** Whisper.cpp via whisper-rs (CoreML/Metal on macOS)
+- **Audio:** cpal + rubato (resampling) + hound (WAV)
+- **Text Injection:** enigo + arboard (clipboard)
+- **Secure Storage:** keyring
+
+<details>
+<summary><strong>Project Structure</strong></summary>
+
+```
+mentascribe-desktop/
+├── src/                          # React frontend
+│   ├── components/
+│   │   ├── dashboard/            # Dashboard window views
+│   │   ├── DictationBar.tsx      # Dictation overlay widget
+│   │   ├── TranscriptionOverlay.tsx
+│   │   └── Settings.tsx
+│   ├── lib/                      # State stores and utilities
+│   │   ├── store.ts              # Main settings store (Zustand)
+│   │   ├── historyStore.ts
+│   │   ├── dictionaryStore.ts
+│   │   └── theme.tsx
+│   ├── App.tsx
+│   └── main.tsx
+├── src-tauri/                    # Rust backend
+│   ├── src/
+│   │   ├── audio/                # Audio capture, VAD
+│   │   ├── transcription/        # Whisper, Voxtral, cloud STT
+│   │   ├── hotkey/               # Global hotkey registration
+│   │   ├── injection/            # Text injection (enigo/clipboard)
+│   │   ├── settings/             # User preferences (persisted)
+│   │   ├── dictionary/           # Custom word dictionary
+│   │   ├── history/              # Transcription history
+│   │   ├── text/                 # Text processing
+│   │   ├── lib.rs                # Tauri command handlers
+│   │   └── main.rs               # Entry point
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── package.json
+└── vite.config.ts
+```
+</details>
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run tauri dev` | Start Tauri development (frontend + backend) |
+| `npm run tauri build` | Build for production |
+| `npm run lint` | Lint TypeScript with ESLint |
+| `npm run format` | Format with Prettier |
+| `npm run typecheck` | Type-check without emitting |
+| `cargo test` | Run Rust tests |
+| `cargo clippy` | Lint Rust code |
 
 ## License
 
-Apache-2.0 — https://github.com/pengyou200902 © 2026
+Apache-2.0
