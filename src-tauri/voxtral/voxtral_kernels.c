@@ -319,6 +319,7 @@ void vox_causal_conv1d(float *out, const float *in, const float *weight, const f
     }
 
     /* out = weight × im2col: [channels_out, K] × [K, out_length] → [channels_out, out_length] */
+#ifdef USE_BLAS
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                 channels_out, out_length, K,
                 1.0f,
@@ -326,6 +327,18 @@ void vox_causal_conv1d(float *out, const float *in, const float *weight, const f
                 im2col, out_length,
                 0.0f,
                 out, out_length);
+#else
+    /* Naive fallback when BLAS is not available */
+    for (int i = 0; i < channels_out; i++) {
+        for (int j = 0; j < out_length; j++) {
+            float sum = 0.0f;
+            for (int p = 0; p < K; p++) {
+                sum += weight[i * K + p] * im2col[p * out_length + j];
+            }
+            out[i * out_length + j] = sum;
+        }
+    }
+#endif
     free(im2col);
 
     /* Add bias */

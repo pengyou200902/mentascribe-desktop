@@ -18,7 +18,24 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+
+#ifdef _WIN32
+#include <windows.h>
+/* gettimeofday shim for Windows */
+struct timeval { long tv_sec; long tv_usec; };
+static int gettimeofday(struct timeval *tv, void *tz) {
+    (void)tz;
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL; /* Jan 1, 1601 -> Jan 1, 1970 */
+    tv->tv_sec = (long)(t / 10000000ULL);
+    tv->tv_usec = (long)((t % 10000000ULL) / 10);
+    return 0;
+}
+#else
 #include <sys/time.h>
+#endif
 
 /* Global verbose flag */
 int vox_verbose = 0;

@@ -1050,6 +1050,13 @@ fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn start_native_drag(_app: tauri::AppHandle) -> Result<(), String> {
+    // On Windows/Linux, dragging is handled via JS-level mousedown + Tauri set_position
+    Ok(())
+}
+
 /// Constants for dictation window dimensions (logical points, as defined in tauri.conf.json).
 /// These are initial/fallback values; the frontend dynamically resizes the window to match
 /// the pill widget, so native positioning uses the actual window frame size instead.

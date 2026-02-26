@@ -25,10 +25,19 @@ fn build_voxtral() {
     let mut build = cc::Build::new();
     build
         .opt_level(3)
-        .flag("-march=native")
-        .flag("-ffast-math")
-        .flag("-flto=thin")
         .include(voxtral_dir);
+
+    // Compiler-specific optimization flags
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_env == "msvc" {
+        // MSVC equivalents
+        build.flag("/fp:fast");
+    } else {
+        // GCC/Clang flags
+        build.flag("-march=native");
+        build.flag("-ffast-math");
+        build.flag("-flto=thin");
+    }
 
     for src in &c_sources {
         build.file(voxtral_dir.join(src));
@@ -77,6 +86,11 @@ fn build_voxtral() {
         println!("cargo:rustc-link-lib=openblas");
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
+    } else if target_os == "windows" {
+        // Windows: CPU-only fallback (no BLAS by default)
+        // If OpenBLAS is installed, uncomment the following:
+        // build.flag("-DUSE_BLAS");
+        // println!("cargo:rustc-link-lib=openblas");
     }
 
     build.compile("voxtral");
