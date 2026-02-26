@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "MentaScribe Desktop - Voice-to-text dictation",
   "author": "MentaFlux",
-  "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
