@@ -1,6 +1,6 @@
 # MentaScribe Desktop
 
-Cross-platform desktop application for voice-to-text dictation, built with Tauri 2.x.
+An open-source, cross-platform desktop dictation app — similar to [Wispr Flow](https://wisprflow.ai/) — built with Tauri 2.x. Runs entirely on-device with no subscription required.
 
 ## Features
 
