@@ -953,6 +953,8 @@ function ThemeSelector() {
   );
 }
 
+const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+
 export function SettingsPage() {
   const { settings, updateSettings } = useStore();
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -1231,7 +1233,7 @@ export function SettingsPage() {
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { value: 'whisper', label: 'Whisper', description: 'OpenAI Whisper — battle-tested, multilingual' },
-                    { value: 'voxtral', label: 'Voxtral', description: 'Mistral 4B Realtime — native streaming, Metal GPU' },
+                    { value: 'voxtral', label: 'Voxtral', description: isMac ? 'Mistral 4B Realtime — native streaming, Metal GPU' : 'Mistral 4B Realtime — native streaming, CPU' },
                   ].map((engine) => {
                     const isSelected = (settings.transcription.engine || 'whisper') === engine.value;
                     return (
@@ -1699,8 +1701,8 @@ export function SettingsPage() {
               onChange={(value) => handleChange('output', 'insert_method', value)}
               options={[
                 { value: 'auto', label: 'Auto', icon: <AutoInsertIcon />, description: 'Tries fastest method, falls back gracefully (recommended)' },
-                { value: 'ax_api', label: 'Accessibility', icon: <AccessibilityIcon />, description: 'macOS AX API — instant, native apps only (~40%)' },
-                { value: 'type', label: 'Keyboard Sim', icon: <TypewriterIcon />, description: 'CGEvent / SendInput — no clipboard, works in ~95% of apps' },
+                { value: 'ax_api', label: 'Accessibility', icon: <AccessibilityIcon />, description: isMac ? 'macOS AX API — instant, native apps only (~40%)' : 'Accessibility API — limited app support' },
+                { value: 'type', label: 'Keyboard Sim', icon: <TypewriterIcon />, description: isMac ? 'CGEvent — no clipboard, works in ~95% of apps' : 'SendInput — no clipboard, works in ~95% of apps' },
                 { value: 'paste', label: 'Clipboard Paste', icon: <ClipboardIcon />, description: 'Classic paste — overwrites your clipboard' },
                 { value: 'paste_restore', label: 'Paste + Restore', icon: <ClipboardRestoreIcon />, description: 'Saves clipboard, pastes, then restores it' },
               ]}

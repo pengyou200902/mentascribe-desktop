@@ -193,8 +193,8 @@ export const Settings: FC<SettingsProps> = ({ onBack, embedded = false }) => {
               className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
             >
               <option value="auto">Auto (smart detection, recommended)</option>
-              <option value="ax_api">Accessibility API (macOS native apps only)</option>
-              <option value="type">Keyboard simulation (CGEvent / SendInput)</option>
+              <option value="ax_api">{navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? 'Accessibility API (macOS native apps only)' : 'Accessibility API (limited app support)'}</option>
+              <option value="type">{navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? 'Keyboard simulation (CGEvent)' : 'Keyboard simulation (SendInput)'}</option>
               <option value="paste">Clipboard paste (overwrites clipboard)</option>
               <option value="paste_restore">Paste + Restore (preserves clipboard)</option>
             </select>
