@@ -132,7 +132,26 @@ mentascribe-desktop/
 └── tsconfig.node.json
 ```
 
-## Windows
+## Platform Support
+
+MentaScribe is built on Tauri and runs on macOS, Windows, and Linux. However, the experience varies by platform — macOS is the primary development target and offers the most complete feature set.
+
+| Feature | macOS | Windows | Linux |
+|---------|:-----:|:-------:|:-----:|
+| Whisper transcription | CoreML + Metal GPU | CPU only | CPU only (OpenBLAS) |
+| Voxtral transcription | Metal GPU | CPU only (slow) | CPU only (OpenBLAS) |
+| Dictation overlay | NSPanel (non-activating, above fullscreen) | Always-on-top (basic) | Always-on-top (basic) |
+| Widget opacity | Native alpha control | Not yet implemented | Not yet implemented |
+| Text injection (Accessibility) | macOS AX API | Falls back to keyboard sim | Falls back to keyboard sim |
+| Text injection (Keyboard) | CGEvent | SendInput | X11 xtest |
+| Global hotkey | Yes | Yes | Yes |
+| Tray icon | Yes | Yes | Yes |
+
+**macOS** provides the best experience thanks to hardware acceleration (Neural Engine via CoreML, Metal GPU), the NSPanel-based overlay that doesn't steal focus from other apps, and native accessibility text injection. If you're choosing a platform, macOS on Apple Silicon is recommended.
+
+**Windows and Linux** support is functional — audio capture, Whisper transcription (CPU), hotkeys, clipboard/keyboard text injection, and the dashboard all work. GPU acceleration and the advanced overlay features are areas for future improvement. Feedbacks welcome!
+
+## App Windows
 
 The app has two windows configured in `src-tauri/tauri.conf.json`:
 
