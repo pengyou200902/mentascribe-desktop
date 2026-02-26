@@ -91,6 +91,9 @@ npm run tauri dev
 
 # Build for current platform
 npm run tauri build
+
+# Start development with Voxtral model support
+pnpm tauri dev --features voxtral
 ```
 
 Build output:

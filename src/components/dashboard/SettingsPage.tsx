@@ -1233,7 +1233,7 @@ export function SettingsPage() {
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { value: 'whisper', label: 'Whisper', description: 'OpenAI Whisper — battle-tested, multilingual' },
-                    { value: 'voxtral', label: 'Voxtral', description: isMac ? 'Mistral 4B Realtime — native streaming, Metal GPU' : 'Mistral 4B Realtime — native streaming, CPU' },
+                    { value: 'voxtral', label: 'Voxtral', description: isMac ? 'Voxtral Mini 4B Realtime 2602 — native streaming, Metal GPU' : 'Voxtral Mini 4B Realtime 2602 — native streaming, CPU' },
                   ].map((engine) => {
                     const isSelected = (settings.transcription.engine || 'whisper') === engine.value;
                     return (

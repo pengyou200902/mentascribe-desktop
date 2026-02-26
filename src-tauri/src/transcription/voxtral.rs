@@ -36,7 +36,7 @@ pub enum VoxtralError {
 // ---------------------------------------------------------------------------
 
 const MODEL_ID: &str = "voxtral-mini-4b";
-const MODEL_NAME: &str = "Voxtral Mini 4B Realtime";
+const MODEL_NAME: &str = "Voxtral Mini 4B Realtime 2602";
 const MODEL_SIZE_MB: u32 = 8900; // ~8.9 GB safetensors
 
 const HF_BASE_URL: &str =
