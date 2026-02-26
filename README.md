@@ -2,6 +2,8 @@
 
 An open-source, cross-platform desktop dictation app — similar to [Wispr Flow](https://wisprflow.ai/) — built with Tauri 2.x. Runs entirely on-device with no subscription required.
 
+Screenshots available in the [`images/`](./images) folder.
+
 ## Features
 
 - **Local speech-to-text** via Whisper.cpp (CoreML + Metal acceleration on macOS)
