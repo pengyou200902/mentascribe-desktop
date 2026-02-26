@@ -4,9 +4,7 @@ An open-source, cross-platform desktop dictation app — similar to [Wispr Flow]
 
 Screenshots available in the [`images/`](./images) folder.
 
-<video src="images/tiny_demo.mov" width="600" autoplay loop muted playsinline></video>
-
-![Watch the short video](images/tiny_demo.mov)
+![Demo](images/tiny_demo.gif)
 
 ## Features
 

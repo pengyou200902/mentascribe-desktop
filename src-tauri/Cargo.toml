@@ -3,7 +3,7 @@ name = "mentascribe-desktop"
 version = "1.0.0"
 description = "MentaScribe Desktop - Voice-to-text dictation"
 authors = ["MentaFlux"]
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/mentaflux/mentascribe"
 edition = "2021"
 
