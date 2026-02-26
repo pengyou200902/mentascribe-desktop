@@ -38,3 +38,5 @@ lerna-debug.log*
 Thumbs.db
 
 .claude
+.planning/*
+!.planning/codebase
