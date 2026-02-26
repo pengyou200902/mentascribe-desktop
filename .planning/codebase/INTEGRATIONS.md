@@ -1,173 +1,210 @@
 # External Integrations
 
-**Analysis Date:** 2026-02-24
+**Analysis Date:** 2026-02-26
 
 ## APIs & External Services
 
-**MentaFlux Voice API:**
-- Service: `https://api.voice.mentaflux.ai/v1`
-- What it's used for: User authentication, transcription history syncing
-- SDK/Client: `reqwest` HTTP client (custom implementation in `src-tauri/src/api/client.rs`)
-- Auth: Bearer token via access_token + refresh_token
-- Endpoints:
-  - `POST /auth/login` - Email/password authentication
-  - `POST /auth/refresh` - Token refresh
-  - `POST /transcriptions` - Submit transcription to dashboard
+**MentaFlux Backend API:**
+- **Service:** MentaFlux voice-to-text cloud API
+- **Endpoint:** https://api.voice.mentaflux.ai/v1
+- **SDK/Client:** Custom HTTP client via `reqwest`
+- **Implementation file:** `src-tauri/src/api/client.rs`
+- **Endpoints:**
+  - `POST /auth/login` — User login (email/password)
+  - `POST /auth/refresh` — Token refresh
+  - `POST /transcriptions` — Store transcription metadata
 
-**Cloud Speech-to-Text (Planned/Stub):**
-- OpenAI Whisper API - Planned, not yet implemented
-- AWS Transcribe - Planned, not yet implemented
-- AssemblyAI - Planned, not yet implemented
-- Provider selection via settings: `transcription.cloud_provider` ("openai", "aws", "assemblyai")
+**Speech-to-Text Providers (Cloud Fallback):**
+These are not fully implemented yet, but infrastructure exists in `src-tauri/src/transcription/cloud.rs`:
+- **OpenAI Whisper API** — Status: TODO
+- **AWS Transcribe** — Status: TODO
+- **AssemblyAI** — Status: TODO
+- Configuration via settings: `transcription.cloud_provider` field
 
-**Cleanup/LLM Services (Configurable):**
-- OpenAI - Optional LLM for text cleanup
-- Anthropic - Optional LLM for text cleanup
-- Ollama - Optional local LLM for text cleanup
-- Custom endpoint - User-specified endpoint for text cleanup
-- Configuration: `settings.cleanup.provider`, `settings.cleanup.model`, `settings.cleanup.custom_endpoint`, `settings.cleanup.api_key`
+**Model Downloads:**
+- **Hugging Face CDN** — Whisper models
+  - Base URL: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main`
+  - Models: ggml-tiny.bin, ggml-base.bin, ggml-small.bin, ggml-medium.bin, ggml-large.bin
+  - VAD model: `ggml-silero-vad.bin`
+  - Usage: `src-tauri/src/transcription/whisper.rs` (model loading/caching)
+
+- **Mistral HuggingFace** — Voxtral model (alternative engine)
+  - Base URL: `https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main`
+  - Model size: ~8.9 GB
+  - Files: consolidated.safetensors, tekken.json, params.json
+  - Usage: `src-tauri/src/transcription/voxtral.rs` (optional voxtral feature)
 
 ## Data Storage
 
-**Local File Storage:**
-- Settings: `~/.config/mentascribe/settings.json` (JSON)
-- History: `~/.config/mentascribe/history.json` (JSON, max 500 entries)
-- Dictionary: `~/.config/mentascribe/dictionary.json` (JSON, custom phrases/replacements)
-- Transcription models: Platform-specific cache directories
-
 **Databases:**
-- None - Application uses JSON file-based local storage only
-- No database server required
-- Client: Standard file I/O via Rust std library + `dirs` crate for path resolution
+- **Not applicable** — No database backend
+- Settings and history stored locally as JSON files
 
-**Authentication Token Storage:**
-- OS Keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
-- Client: `keyring` crate v2.0
-- Stored as: `mentascribe` service with `tokens` entry (JSON serialized)
+**File Storage (Local Filesystem):**
+- **Settings:** `~/.config/mentascribe/settings.json` (user settings via `dirs` crate)
+  - Managed by: `src-tauri/src/settings/mod.rs`
+  - Content: transcription, cleanup, hotkey, output, widget settings
+
+- **Models Cache:** `~/.mentascribe/models/`
+  - Whisper models: `ggml-tiny.bin`, `ggml-base.bin`, etc.
+  - VAD model: `ggml-silero-vad.bin`
+  - Voxtral models: `consolidated.safetensors`, `tekken.json`, `params.json`
+  - Managed by: `src-tauri/src/transcription/whisper.rs`, `voxtral.rs`
+
+- **History:** Stored in-memory via Zustand, persisted via Tauri file plugin
+  - Store: `src/lib/historyStore.ts`
+  - Location: TBD (likely `~/.config/mentascribe/history.json`)
+
+- **Dictionary:** Stored in-memory via Zustand
+  - Store: `src/lib/dictionaryStore.ts`
+
+**Caching:**
+- **In-memory Model Cache:** Whisper context cached in `src-tauri/src/transcription/whisper.rs`
+  - Static: `MODEL_CACHE` (WhisperContext)
+  - Static: `STATE_CACHE` (Pre-allocated WhisperState for 50-200ms speedup)
+- **No external caching service** — All caching is local/in-memory
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- Custom backend: MentaFlux Voice API
-- Implementation approach: Email/password login with JWT tokens
-- Token management: Access token + refresh token stored in OS keychain
-- Token persistence: `keyring::Entry::new("mentascribe", "tokens")`
+- **Custom MentaFlux API** — Custom authentication
+- **Implementation:** `src-tauri/src/api/client.rs`
+- **Token Types:**
+  - Access Token (Bearer token for API requests)
+  - Refresh Token (for refreshing expired access tokens)
+  - User Info (id, email, name, avatar_url)
 
-**Session Management:**
-- Automatic token refresh via `src-tauri/src/api/client.rs::refresh_token()`
-- Failed requests with 401 status trigger re-authentication flow
-- Tokens cleared on logout via `keyring::Entry::delete_password()`
+- **Token Storage:**
+  - **Secure:** OS Keychain via `keyring` crate
+    - macOS: Keychain
+    - Windows: Credential Manager
+    - Linux: Secret Service
+  - Entry name: `mentascribe`/`tokens`
+  - Content: JSON-encoded access_token and refresh_token
+  - Functions: `store_tokens()`, `get_stored_tokens()`, `clear_tokens()`
+
+**Frontend State:**
+- Zustand store: `src/lib/store.ts` (user settings only, not auth state visible)
+- Auth state managed in Rust backend via AppState Mutex
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- Not detected - No error tracking integration (e.g., Sentry, Rollbar)
+- **Not detected** — No Sentry, Rollbar, or similar integration
 
-**Logs:**
-- Local logging via `log` crate with `env_logger`
-- Configuration: Environment variable based via `env_logger` (e.g., `RUST_LOG=info`)
-- Output: Console/stderr in debug, file logging not configured
-- Frontend: Console.error/console.log for debugging
+**Logging:**
+- **Framework:** `log` crate with `env_logger` backend
+- **Level:** Configurable via RUST_LOG environment variable
+- **Log statements:** Throughout codebase (src-tauri/src/)
+  - Example: `log::info!()`, `log::warn!()`
+- **No remote logging** — Logs are local only
+
+**Analytics:**
+- **Not detected** — No analytics service integrated
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Desktop application (self-contained .app on macOS, .exe/.msi on Windows, .AppImage on Linux)
-- No centralized hosting - distributed as standalone executable
+- **Target Platforms:** Desktop (macOS, Windows, Linux)
+- **No cloud hosting** — This is a desktop application distributed via installers
+
+**Build & Distribution:**
+- **Tauri Bundler:** Creates platform-specific installers
+  - macOS: `.dmg` (disk image)
+  - Windows: `.msi`, `.nsis`
+  - Linux: `.appimage`, `.deb`, `.rpm`
+- **Build config:** `src-tauri/tauri.conf.json`
+  - Bundle category: Productivity
+  - Icon sets: 32x32, 128x128, 128x128@2x (Retina), .icns (macOS), .ico (Windows)
 
 **CI Pipeline:**
-- Not detected - No GitHub Actions, GitLab CI, or other CI pipeline configured
-- Manual build process via `cargo tauri build`
+- **Not detected** — No GitHub Actions, GitLab CI, or similar configured in visible files
 
-**Distribution:**
-- Tauri built-in update mechanism (not configured)
-- Manual distribution required
-
-## Environment Configuration
-
-**Required env vars:**
-- `RUST_LOG` - Logging level (optional, default not set)
-- `TAURI_DEBUG` - Debug mode flag (optional, used in vite.config.ts for source maps)
-
-**Secrets location:**
-- Auth tokens: OS Keychain (encrypted by OS)
-- API keys: Stored in settings.json (user-provided for cleanup providers)
-- Environment files: `.env`, `.env.local`, `.env.*.local` are ignored in `.gitignore` (present detection only - contents never committed)
-
-**Settings Configuration:**
-Location: `~/.config/mentascribe/settings.json`
-
-Schema:
-```json
-{
-  "transcription": {
-    "provider": "whisper-local|vosk|cloud",
-    "language": "auto|en|es|...",
-    "model_size": "tiny|base|small|medium|large",
-    "cloud_provider": "aws|openai|assemblyai",
-    "use_coreml": true|false|null,
-    "engine": "whisper|voxtral",
-    "voxtral_delay_ms": 80-2400
-  },
-  "cleanup": {
-    "enabled": true|false,
-    "provider": "openai|anthropic|ollama|custom",
-    "model": "string",
-    "custom_endpoint": "https://...",
-    "api_key": "string",
-    "remove_filler": true|false,
-    "add_punctuation": true|false,
-    "format_paragraphs": true|false
-  },
-  "hotkey": {
-    "key": "F6|F5|...",
-    "mode": "hold|toggle"
-  },
-  "output": {
-    "insert_method": "type|paste",
-    "auto_capitalize": true|false
-  },
-  "widget": {
-    "draggable": true|false,
-    "opacity": 0.2-1.0
-  }
-}
-```
+**Signing & Notarization:**
+- **macOS:** Entitlements support (not currently configured, `entitlements: null`)
+- **Windows:** Code signing support (certificate thumbprint, digest algorithm available)
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- Not detected
+- **Not applicable** — Desktop app is event-driven only
 
 **Outgoing:**
-- Transcriptions synced to MentaFlux API via `POST /v1/transcriptions` endpoint
-- Marked as synced in local history via `mark_synced()` after successful submission
-- Sync status tracked per entry: `TranscriptionEntry.synced` boolean field
+- **API Callbacks:** Creates transcription records via `POST /transcriptions`
+  - Triggered after successful speech-to-text conversion
+  - Payload: raw text, cleaned text (if processed), duration, language
+  - Implementation: `src-tauri/src/api/client.rs::create_transcription()`
 
-## Tauri IPC Bridge
+## System Integration Points
 
-**Frontend → Backend Commands:**
-- `invoke('get_settings')` - Load user settings from disk
-- `invoke('update_settings', { newSettings })` - Persist settings to disk
-- Audio recording and transcription commands (transcription module)
-- History and dictionary management commands
+**OS-Level Integrations:**
 
-**Backend → Frontend Events:**
-- `emit()` based events for transcription progress, status updates
+1. **Audio Capture (System Microphone):**
+   - Library: `cpal` (cross-platform)
+   - VAD (Voice Activity Detection): `src-tauri/src/audio/vad.rs`
+   - Captures and processes microphone input for transcription
 
-## Data Sync Architecture
+2. **Text Injection (System Keyboard):**
+   - Library: `enigo` (cross-platform keyboard simulation)
+   - Clipboard: `arboard` (copy-to-clipboard alternative)
+   - Injects transcribed text into active application
 
-**Unsynced Records:**
-- New transcriptions created locally with `synced: false`
-- Dictionary entries created with `synced: false`
-- History entries created with `synced: false`
+3. **Hotkey System:**
+   - Library: `global-hotkey` (cross-platform system hotkeys)
+   - Configurable: F5, F6, other keys
+   - Modes: toggle, hold
+   - Implementation: `src-tauri/src/hotkey/mod.rs`
 
-**Sync Strategy:**
-- Application sends unsynced entries to `/v1/transcriptions` endpoint
-- Server responds with success/failure
-- Client calls `mark_synced()` to update local records
-- Entries remain locally (never deleted, only marked as synced)
+4. **Credential Storage:**
+   - macOS: Keychain (via `keyring`)
+   - Windows: Credential Manager
+   - Linux: Secret Service
+   - Stores: API tokens, refresh tokens
+
+5. **Display & Monitor Detection (macOS specific):**
+   - Libraries: `core-graphics`, `core-foundation`
+   - Used in: Monitor positioning for NSPanel overlay
+   - Critical for mixed-DPI coordinate conversion (see MEMORY.md)
+
+6. **Accessibility (macOS private API):**
+   - Library: `accessibility-sys`
+   - Feature flag: `tauri/macos-private-api`
+   - Enables NSPanel fullscreen overlay capability
+
+7. **Clipboard (Platform-Specific):**
+   - macOS/Linux: `arboard` (cross-platform)
+   - Windows: `clipboard-win` (Windows-specific)
+
+## Security & Sensitive Data
+
+**API Authentication:**
+- **Token Storage:** OS Keychain (never in plain text on disk)
+- **HTTPS Enforcement:** All API calls to https://api.voice.mentaflux.ai
+- **Bearer Token:** Used for authenticated requests to `/transcriptions`
+- **Token Refresh:** Automatic refresh via refresh_token
+
+**Content Security Policy (CSP):**
+- `src-tauri/tauri.conf.json` security section:
+  - Default source: `'self'`
+  - Connect source: https://api.voice.mentaflux.ai (API domain only)
+  - Image source: `'self'`, `data:`, `https:` (remote images allowed)
+  - Style source: `'self'`, `'unsafe-inline'` (Tailwind requires inline)
+
+**Audio Data:**
+- Local models: Whisper processes audio entirely offline
+- Cloud transcription: Audio would be sent to configured cloud provider (currently disabled)
+
+## Environment Variables
+
+**No .env file used** — Configuration is stored via:
+1. **Zustand store** (in-memory): User settings
+2. **OS Keychain** (secure): API tokens
+3. **Disk JSON** (`~/.config/mentascribe/settings.json`): Persistent settings
+
+**Optional Build Variables:**
+- `RUST_LOG` — Logger level control (when running with env_logger)
+- `TAURI_DEBUG` — Enables debug builds and sourcemaps
 
 ---
 
-*Integration audit: 2026-02-24*
+*Integration audit: 2026-02-26*
