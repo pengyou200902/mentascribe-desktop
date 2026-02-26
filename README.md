@@ -4,6 +4,10 @@ An open-source, cross-platform desktop dictation app — similar to [Wispr Flow]
 
 Screenshots available in the [`images/`](./images) folder.
 
+<video src="images/tiny_demo.mov" width="600" autoplay loop muted playsinline></video>
+
+![Watch the short video](images/tiny_demo.mov)
+
 ## Features
 
 - **Local speech-to-text** via Whisper.cpp (CoreML + Metal acceleration on macOS)
@@ -78,6 +82,9 @@ sudo apt install libwebkit2gtk-4.1-dev \
 ### Install and Run
 
 ```bash
+git clone https://github.com/pengyou200902/mentascribe-desktop.git
+cd mentascribe-desktop
+
 # Install dependencies
 npm install
 
@@ -180,4 +187,4 @@ mentascribe-desktop/
 
 ## License
 
-Apache-2.0
+MIT
