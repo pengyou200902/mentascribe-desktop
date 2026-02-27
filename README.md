@@ -14,8 +14,6 @@ Screenshots available in the [`images/`](./images) folder.
 - **Dictation widget** — always-on-top transparent overlay (NSPanel on macOS)
 - **Dashboard window** — history, statistics, dictionary, and settings
 - **Custom dictionary** — user-defined word replacements and corrections
-- **Cloud STT fallback** (optional)
-- **MentaScribe account sync** (optional, via `api.voice.mentaflux.ai`)
 
 ## Platform Support
 
