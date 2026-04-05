@@ -73,9 +73,8 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 whisper-rs = { version = "0.16", features = ["coreml", "metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# GPU acceleration: CUDA 12.9 doesn't support VS 18 yet, Vulkan needs SDK install.
-# Re-enable when CUDA adds VS 18 support: features = ["cuda"]
-# whisper-rs = { version = "0.16", features = ["cuda"] }
+# GPU acceleration via CUDA (requires CUDAHOSTCXX pointing to VS 2022 cl.exe on VS 18)
+whisper-rs = { version = "0.16", features = ["cuda"] }
 windows = { version = "0.54", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Foundation",
