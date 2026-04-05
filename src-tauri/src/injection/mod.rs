@@ -452,8 +452,10 @@ mod platform {
 mod platform {
     use std::mem::size_of;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_V,
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_MOVE, MOUSEINPUT,
+        VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+        VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
     };
 
     pub fn check_accessibility() -> bool {
@@ -495,6 +497,42 @@ mod platform {
                 },
             },
         }
+    }
+
+    /// Send key-up events for all modifier keys to clear any stuck state.
+    /// This prevents hotkey modifiers (Ctrl, Shift, Alt, Win) from leaking
+    /// into the injected text — a common issue when injection runs immediately
+    /// after a global hotkey is released.
+    pub fn clear_modifier_keys() {
+        let modifiers = [
+            VK_SHIFT, VK_LSHIFT, VK_RSHIFT,
+            VK_CONTROL, VK_LCONTROL, VK_RCONTROL,
+            VK_MENU, VK_LMENU, VK_RMENU,
+            VK_LWIN, VK_RWIN,
+        ];
+        let inputs: Vec<INPUT> = modifiers.iter().map(|&vk| make_key_input(vk, true)).collect();
+        unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    }
+
+    /// Send a zero-delta mouse move event. This forces Windows to flush its
+    /// internal input buffer, which fixes a Win11 bug where SendInput
+    /// KEYEVENTF_UNICODE text gets buffered in apps like Notepad until a
+    /// mouse event occurs.
+    fn flush_input_buffer() {
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
     }
 
     // ── Tier 1: SendInput KEYEVENTF_UNICODE ────────────────────────────────
@@ -549,6 +587,11 @@ mod platform {
                 )));
             }
         }
+
+        // Flush Windows input buffer with a zero-delta mouse move.
+        // Fixes Win11 bug where KEYEVENTF_UNICODE text gets buffered in
+        // apps like Notepad until a mouse/input event flushes it.
+        flush_input_buffer();
 
         eprintln!(
             "[sendinput_unicode] Injected {} chars via {} events",
@@ -827,6 +870,12 @@ fn inject_auto_macos(text: &str) -> Result<(), InjectionError> {
 /// Windows auto mode: SendInput KEYEVENTF_UNICODE → clipboard save/paste/restore
 #[cfg(target_os = "windows")]
 fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
+    // Clear any stuck modifier keys from the hotkey that triggered dictation.
+    // Without this, Ctrl/Shift/Alt from the hotkey can leak into the injected
+    // text, producing garbage or unexpected shortcuts in the target app.
+    platform::clear_modifier_keys();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
     // Tier 1: SendInput for text up to ~2000 chars
     if text.chars().count() <= 2000 {
         match platform::sendinput_unicode(text) {
