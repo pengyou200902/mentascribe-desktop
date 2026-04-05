@@ -28,7 +28,7 @@ hound = "3.5"
 rubato = "0.16"
 
 # Speech-to-text (CoreML feature added via macOS target section below)
-whisper-rs = "0.15"
+whisper-rs = "0.16"
 
 # Hotkey
 global-hotkey = "0.5"
@@ -70,7 +70,7 @@ foreign-types = "0.5"
 accessibility-sys = "0.1"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 # Enable CoreML for Apple Neural Engine acceleration + Metal for GPU decoder on macOS
-whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
+whisper-rs = { version = "0.16", features = ["coreml", "metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.54", features = [
