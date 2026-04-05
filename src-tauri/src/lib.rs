@@ -143,6 +143,17 @@ pub struct AppState {
 fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     eprintln!("[recording] start_recording called");
 
+    // On Windows, re-show the dictation window if it was hidden after injection
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(window) = app.get_webview_window("dictation") {
+            if !window.is_visible().unwrap_or(true) {
+                eprintln!("[recording] Re-showing dictation window");
+                window.show().ok();
+            }
+        }
+    }
+
     let mut is_recording = state.is_recording.lock().map_err(|e| e.to_string())?;
     if *is_recording {
         eprintln!("[recording] WARNING: already recording");
@@ -408,7 +419,26 @@ async fn stop_recording(
 }
 
 #[tauri::command]
-fn inject_text(text: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+fn inject_text(text: String, app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // On Windows, hide the dictation window before injecting so the target app
+    // regains focus. Without this, SendInput sends keystrokes to our own window.
+    // On macOS, the NSPanel with NSNonactivatingPanelMask prevents focus stealing,
+    // so this isn't needed.
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(window) = app.get_webview_window("dictation") {
+            if window.is_visible().unwrap_or(false) {
+                eprintln!("[inject] Hiding dictation window to restore focus to target app");
+                window.hide().ok();
+                // Give Windows time to process the focus change
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    // Suppress unused variable warning on non-Windows
+    #[cfg(not(target_os = "windows"))]
+    let _ = &app;
+
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     injection::inject_text(&text, &settings).map_err(|e| e.to_string())
 }
