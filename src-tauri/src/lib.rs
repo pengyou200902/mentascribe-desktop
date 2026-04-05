@@ -123,10 +123,57 @@ fn apply_panel_opacity(app: &tauri::AppHandle, opacity: f64) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Apply non-activating overlay styles to the dictation window on Windows.
+/// This is the Windows equivalent of macOS NSPanel + NSNonactivatingPanelMask.
+/// WS_EX_NOACTIVATE prevents the window from stealing focus when shown or clicked,
+/// so SendInput keystrokes always reach the target app (not our overlay).
+#[cfg(target_os = "windows")]
 fn setup_dictation_panel(_app: &tauri::AppHandle) {
-    // On non-macOS platforms, the alwaysOnTop config setting is sufficient
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    };
+    use windows::core::w;
+
+    unsafe {
+        let hwnd = FindWindowW(None, w!("MentaScribe"));
+        if hwnd == HWND(0) {
+            eprintln!("[windows] WARNING: dictation window not found by title");
+            return;
+        }
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let new_style = ex_style
+            | WS_EX_NOACTIVATE.0 as isize
+            | WS_EX_TOPMOST.0 as isize
+            | WS_EX_TOOLWINDOW.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+        eprintln!("[windows] Applied WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW to dictation window");
+    }
 }
+
+/// Show the dictation window without stealing focus on Windows.
+/// Uses ShowWindow(SW_SHOWNOACTIVATE) + SetWindowPos(SWP_NOACTIVATE) instead of
+/// Tauri's window.show() which internally calls ShowWindow(SW_SHOW) and activates.
+#[cfg(target_os = "windows")]
+fn show_dictation_no_activate(_app: &tauri::AppHandle) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, ShowWindow, SetWindowPos,
+        SW_SHOWNOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, HWND_TOPMOST,
+    };
+    use windows::core::w;
+
+    unsafe {
+        let hwnd = FindWindowW(None, w!("MentaScribe"));
+        if hwnd == HWND(0) { return; }
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn setup_dictation_panel(_app: &tauri::AppHandle) {}
 
 #[cfg(not(target_os = "macos"))]
 fn refresh_panel_settings(_app: &tauri::AppHandle) {
@@ -142,17 +189,7 @@ pub struct AppState {
 #[tauri::command]
 fn start_recording(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     eprintln!("[recording] start_recording called");
-
-    // On Windows, re-show the dictation window if it was hidden after injection
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(window) = app.get_webview_window("dictation") {
-            if !window.is_visible().unwrap_or(true) {
-                eprintln!("[recording] Re-showing dictation window");
-                window.show().ok();
-            }
-        }
-    }
+    let _ = &app; // suppress unused warning on non-macOS
 
     let mut is_recording = state.is_recording.lock().map_err(|e| e.to_string())?;
     if *is_recording {
@@ -419,26 +456,10 @@ async fn stop_recording(
 }
 
 #[tauri::command]
-fn inject_text(text: String, app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // On Windows, hide the dictation window before injecting so the target app
-    // regains focus. Without this, SendInput sends keystrokes to our own window.
-    // On macOS, the NSPanel with NSNonactivatingPanelMask prevents focus stealing,
-    // so this isn't needed.
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(window) = app.get_webview_window("dictation") {
-            if window.is_visible().unwrap_or(false) {
-                eprintln!("[inject] Hiding dictation window to restore focus to target app");
-                window.hide().ok();
-                // Give Windows time to process the focus change
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
-    }
-    // Suppress unused variable warning on non-Windows
-    #[cfg(not(target_os = "windows"))]
-    let _ = &app;
-
+fn inject_text(text: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // On Windows, WS_EX_NOACTIVATE (set in setup_dictation_panel) ensures the
+    // dictation overlay never steals focus, so SendInput reaches the target app.
+    // On macOS, NSPanel + NSNonactivatingPanelMask provides the same guarantee.
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     injection::inject_text(&text, &settings).map_err(|e| e.to_string())
 }
@@ -1082,8 +1103,11 @@ fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-fn start_native_drag(_app: tauri::AppHandle) -> Result<(), String> {
-    // On Windows/Linux, dragging is handled via JS-level mousedown + Tauri set_position
+fn start_native_drag(app: tauri::AppHandle) -> Result<(), String> {
+    // On Windows/Linux, use Tauri's built-in window dragging
+    if let Some(window) = app.get_webview_window("dictation") {
+        window.start_dragging().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -1414,7 +1438,15 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 .unwrap_or(false);
             eprintln!("[toggle] Showing dictation window, draggable={}", is_draggable);
 
-            window.show().ok();
+            // On Windows, show without stealing focus from the target app
+            #[cfg(target_os = "windows")]
+            {
+                show_dictation_no_activate(app);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                window.show().ok();
+            }
             // Re-apply panel settings after show (macOS may reset them)
             refresh_panel_settings(app);
 
@@ -1424,6 +1456,14 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 {
                     eprintln!("[toggle] Repositioning to cursor monitor (draggable=false)");
                     match native_position_on_cursor_monitor(app, false) {
+                        Ok(moved) => eprintln!("[toggle] Position result: moved={}", moved),
+                        Err(e) => eprintln!("[toggle] Position ERROR: {}", e),
+                    }
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    eprintln!("[toggle] Repositioning to cursor monitor (draggable=false)");
+                    match reposition_to_mouse_monitor(app.clone()) {
                         Ok(moved) => eprintln!("[toggle] Position result: moved={}", moved),
                         Err(e) => eprintln!("[toggle] Position ERROR: {}", e),
                     }
@@ -1600,6 +1640,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 native_position_on_cursor_monitor(&app_handle, false).ok();
+            }
+            #[cfg(target_os = "windows")]
+            {
+                reposition_to_mouse_monitor(app_handle.clone()).ok();
             }
 
             // Build tray menu (shown on right-click)
