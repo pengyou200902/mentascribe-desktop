@@ -1,300 +1,269 @@
 # Architecture
 
-**Analysis Date:** 2026-02-26
+**Analysis Date:** 2026-04-05
 
 ## Pattern Overview
 
-**Overall:** Multi-window Tauri desktop application with Rust backend + React/TypeScript frontend
+**Overall:** Multi-window Tauri v2 desktop application with a Rust native backend and React/TypeScript frontend
 
 **Key Characteristics:**
-- Two distinct window types: dictation overlay (NSPanel on macOS) and dashboard management UI
-- Unidirectional command flow: Frontend invokes Tauri commands → Rust backend → Frontend listens for events
-- Zustand for lightweight frontend state management
-- Rust Mutex-based AppState for backend synchronization
-- Platform-specific implementations (macOS NSPanel, Windows clipboard, Linux X11)
+- Two distinct Tauri windows sharing a single React app, differentiated by URL hash (`#dashboard` vs default dictation)
+- Unidirectional command-event IPC: Frontend calls `invoke()` commands, backend emits events via `app.emit()`
+- Zustand stores on the frontend, `Mutex<AppState>` on the backend
+- Platform-specific native code gated by `#[cfg(target_os)]` for macOS NSPanel, Windows clipboard, Linux X11
+- Feature-gated Voxtral engine (`#[cfg(feature = "voxtral")]`) alongside default Whisper engine
+- All persistent data stored as JSON files in `~/.config/mentascribe/`
 
 ## Layers
 
 **Frontend UI Layer:**
-- Purpose: React components for user interaction (dictation bar + dashboard)
+- Purpose: React components rendering dictation overlay and dashboard management UI
 - Location: `src/components/`, `src/App.tsx`
-- Contains: React components, hooks, styling with Tailwind CSS
-- Depends on: Tauri API (`@tauri-apps/api/core`), Zustand stores
-- Used by: App entry point
-- Key files: `DictationBar.tsx` (overlay), `Dashboard.tsx` (settings/history/stats)
+- Contains: React functional components, Tailwind CSS styling, SVG icons inline
+- Depends on: Tauri API (`@tauri-apps/api/core`, `@tauri-apps/api/event`), Zustand stores
+- Used by: `src/main.tsx` entry point
 
 **Frontend State Layer:**
 - Purpose: Centralized state management via Zustand stores
 - Location: `src/lib/store.ts`, `src/lib/historyStore.ts`, `src/lib/dictionaryStore.ts`, `src/lib/statsStore.ts`
-- Contains: Store definitions with async invoke patterns
-- Depends on: Tauri core API for invoke/listen
-- Used by: React components via hooks
-- Pattern: Create stores with `create()`, expose via `useStore()` hook
+- Contains: Zustand store definitions with async `invoke()` calls
+- Depends on: `@tauri-apps/api/core` for `invoke()`
+- Used by: React components via `useStore()`, `useHistoryStore()`, `useDictionaryStore()`, `useStatsStore()` hooks
+- Pattern: `create<StoreInterface>((set, get) => ({ ... }))`
 
 **Tauri IPC Bridge:**
-- Purpose: RPC between frontend and Rust backend
-- Location: Commands in `src-tauri/src/lib.rs`, events via `app.emit()`
-- Contains: Decorated functions with `#[tauri::command]`, event emitters
-- Key commands: `start_recording`, `stop_recording`, `inject_text`, `get_settings`, `update_settings`
-- Key events: `hotkey-pressed`, `hotkey-released`, `audio-level`, `transcription-complete`, `settings-changed`
+- Purpose: Typed RPC between JS frontend and Rust backend
+- Location: Commands defined in `src-tauri/src/lib.rs` via `#[tauri::command]`, registered in `tauri::generate_handler![]`
+- Contains: ~35 command handlers, event emissions
+- Key commands: `start_recording`, `stop_recording`, `inject_text`, `get_settings`, `update_settings`, `download_model`, `get_history`, `get_dictionary`, `get_stats`, `resize_pill`, `reposition_to_mouse_monitor`, `start_native_drag`, `is_cursor_over_pill`
+- Key events: `hotkey-pressed`, `hotkey-released`, `audio-level`, `transcription-processing`, `transcription-complete`, `settings-changed`, `model-preload-start`, `model-preload-complete`, `model-preload-error`, `model-needs-download`, `download-progress`, `navigate-to-page`
 
-**Rust Backend Application Layer:**
-- Purpose: Core application logic and business rules
-- Location: `src-tauri/src/lib.rs` (~1662 lines)
-- Contains: Command handlers, app initialization, AppState management, event dispatch
-- Entry points: `tauri::Builder` setup, `setup_dictation_panel()`, `start_recording()`, `stop_recording()`
-- Manages: Global AppState with settings, recording state, audio level emitter
+**Rust Backend - Application Core:**
+- Purpose: Command handlers, app initialization, window management, state coordination
+- Location: `src-tauri/src/lib.rs` (~1670 lines)
+- Contains: `AppState` struct, `run()` function, all `#[tauri::command]` handlers, macOS NSPanel setup, native drag/positioning, tray menu
+- Manages: Global state (recording flag, settings, audio level emitter), window lifecycle, model preloading
 
-**Rust Backend - Subsystems:**
+**Rust Backend - Subsystem Modules:**
 
-**Audio Capture Subsystem:**
-- Purpose: Microphone input acquisition and voice activity detection
-- Location: `src-tauri/src/audio/capture.rs`, `src-tauri/src/audio/vad.rs`
-- Contains: CPAL audio device management, resampling, VAD via whisper-rs
-- Used by: Recording flow (start_recording → audio::capture::start_capture)
-- Key functions: `start_capture()`, `stop_capture()`, `get_current_level()`
-- Data: AudioData struct with samples and sample_rate
+| Module | Location | Purpose |
+|--------|----------|---------|
+| audio | `src-tauri/src/audio/` | Microphone capture (CPAL), real-time resampling (rubato), voice activity detection |
+| transcription | `src-tauri/src/transcription/` | Speech-to-text via Whisper.cpp or Voxtral, model management, streaming inference |
+| settings | `src-tauri/src/settings/mod.rs` | Configuration persistence (`settings.json`), typed structs with Serde |
+| hotkey | `src-tauri/src/hotkey/mod.rs` | Global keyboard shortcut registration via tauri-plugin-global-shortcut |
+| injection | `src-tauri/src/injection/mod.rs` | Text insertion into active application (platform-specific: CGEvent/Windows/X11) |
+| history | `src-tauri/src/history/mod.rs` | Transcription log persistence (`history.json`), CRUD operations |
+| dictionary | `src-tauri/src/dictionary/mod.rs` | Text replacement rules (`dictionary.json`), in-memory RwLock cache |
+| stats | `src-tauri/src/stats/mod.rs` | Usage metrics persistence (`stats.json`), daily/streak tracking |
+| text | `src-tauri/src/text/mod.rs` | Post-transcription processing (auto-capitalization) |
+| api | `src-tauri/src/api/` | External API client for MentaFlux cloud service, keyring token storage |
 
-**Transcription Subsystem:**
-- Purpose: Convert audio to text via Whisper or Voxtral engines
-- Location: `src-tauri/src/transcription/`
-- Contains: Model management, streaming transcription, fallback logic
-- Two engines: Whisper (local, CPU/GPU) and Voxtral (proprietary, Metal GPU on macOS)
-- Whisper pipeline: `whisper::start_streaming()` (VAD trigger) + `whisper::stop_streaming()` (tail inference)
-- Voxtral pipeline: `voxtral::start_streaming()` (continuous) + `voxtral::finish()` (final)
-- Key data structures: ModelInfo, CoremlStatus, MetalStatus, VoxtralStatus
-
-**Settings Management:**
-- Purpose: Persistent user configuration
-- Location: `src-tauri/src/settings/mod.rs`
-- Persists to: `~/.config/mentascribe/settings.json`
-- Structure: TranscriptionSettings, HotkeySettings, OutputSettings, WidgetSettings, CleanupSettings
-- Flow: Frontend loads via `get_settings()` → Zustand store → UI → update via `update_settings()`
-- Side effects: Hotkey re-registration, model preloading, panel reposition when draggable changes
-
-**Hotkey System:**
-- Purpose: Global keyboard shortcut listening
-- Location: `src-tauri/src/hotkey/mod.rs`
-- Uses: tauri-plugin-global-shortcut
-- Modes: "toggle" (press = record/stop) or "hold" (press = start, release = stop)
-- Events emitted: `hotkey-pressed`, `hotkey-released`
-- Lifecycle: `setup_hotkey()` on init, re-register on settings change, `unregister_all()` before change
-
-**Text Injection:**
-- Purpose: Insert transcribed text into active application
-- Location: `src-tauri/src/injection/mod.rs`
-- Platform implementations:
-  - macOS: CGEventKeyboardSetUnicodeString (raw keyboard events)
-  - Windows: Windows clipboard API + paste simulation
-  - Linux: X11 key simulation
-- Method: Default is paste via clipboard (faster, more compatible)
-- Error handling: Requires accessibility permission on macOS
-
-**History Module:**
-- Purpose: Local persistent record of transcriptions
-- Location: `src-tauri/src/history/mod.rs`
-- Persists to: `~/.config/mentascribe/history.json`
-- Structure: TranscriptionEntry with id, text, word_count, duration_ms, timestamp, synced flag
-- Limit: 500 entries max (older entries pruned)
-- Commands: `get_history()`, `delete_entry()`, `clear_history()`, `get_total_count()`
-
-**Dictionary Module:**
-- Purpose: Text replacement rules (e.g., "u" → "you")
-- Location: `src-tauri/src/dictionary/mod.rs`
-- Persists to: `~/.config/mentascribe/dictionary.json`
-- Applied: After transcription, before injection via `dictionary::apply_replacements()`
-- Structure: DictionaryEntry with id, phrase, replacement, enabled flag
-
-**Statistics Module:**
-- Purpose: Aggregate usage metrics
-- Location: `src-tauri/src/stats/mod.rs`
-- Persists to: `~/.config/mentascribe/stats.json`
-- Tracks: Daily transcription count, words, audio seconds, usage streak
-- Updated: Automatically when transcription completes via `record_transcription()`
-
-**Text Processing:**
-- Purpose: Post-transcription text transformations
-- Location: `src-tauri/src/text/mod.rs`
-- Transforms: Auto-capitalization of sentence starts
-- Applied: After transcription, before dictionary/injection
-
-**macOS NSPanel Integration:**
-- Purpose: Fullscreen overlay capability (dictation bar stays on top of fullscreen apps)
-- Location: `src-tauri/src/lib.rs` functions `setup_dictation_panel()`, `refresh_panel_settings()`, `apply_panel_opacity()`
-- Uses: tauri-nspanel plugin (GitHub: ahkohd/tauri-nspanel)
-- Panel configuration:
-  - Window level: 25 (NSMainMenuWindowLevel + 1)
-  - Collection behavior: CanJoinAllSpaces, Stationary, FullScreenAuxiliary, IgnoresCycle
-  - Style: NSNonactivatingPanelMask (128) to avoid focus stealing
-  - Opacity: Configurable via NSPanel setAlphaValue
-- Limitations: Focus stealing behavior, manual JS-level dragging workaround needed
+**Native C Layer (Voxtral, feature-gated):**
+- Purpose: Custom speech-to-text engine with Metal GPU acceleration
+- Location: `src-tauri/voxtral/` (C source), `src-tauri/src/transcription/voxtral_ffi.rs` (Rust FFI bindings)
+- Contains: Encoder, decoder, tokenizer, audio processing, Metal shaders, safetensors model loading
+- Build: Compiled via `cc` crate in `src-tauri/build.rs`, Metal shaders precompiled to `.metallib`
+- Platform: macOS Apple Silicon (Metal GPU), Linux (OpenBLAS), Windows (CPU fallback)
 
 ## Data Flow
 
-**Recording Flow:**
+**Recording Flow (primary data pipeline):**
 
-1. User presses hotkey (or dashboard dictation button)
-2. Frontend calls `invoke('start_recording')`
-3. Rust backend:
-   - Sets `is_recording = true` in AppState
-   - Starts audio capture via `audio::capture::start_capture()`
-   - Determines engine (Whisper vs Voxtral) from settings
-   - If Whisper: Starts streaming with VAD monitoring (emits partial results)
-   - If Voxtral: Starts streaming mode with configured delay
-   - Spawns audio level emitter thread (emits 25fps `audio-level` events)
-4. Frontend updates state, shows waveform animation, processing spinner
+1. User presses global hotkey (F6 default)
+2. Rust `hotkey/mod.rs` emits `hotkey-pressed` event to all windows
+3. Frontend `App.tsx` (dictation window only) receives event, calls `invoke('start_recording')`
+4. Rust `start_recording()` in `lib.rs`:
+   - Locks `AppState.is_recording` mutex, sets to `true`
+   - Calls `audio::capture::start_capture()` which spawns CPAL audio thread
+   - Determines engine from settings (`is_voxtral_engine()`)
+   - Starts streaming transcription (`whisper::start_streaming()` or `voxtral::start_streaming()`)
+   - Spawns audio level emitter thread (25ms interval, emits `audio-level` events)
+5. Frontend receives `audio-level` events, drives waveform animation in `DictationBar.tsx`
 
-5. User releases hotkey (or stops recording)
-6. Frontend calls `invoke('stop_recording')`
-7. Rust backend:
-   - Stops audio level emitter
-   - Stops streaming transcriber (collects remaining results)
-   - Stops audio capture
-   - Trims tail audio (only untranscribed portion)
-   - Runs final transcription on tail (or returns streaming result if complete)
-   - Applies text processing (auto-capitalize)
-   - Applies dictionary replacements
-   - Records history entry
-   - Records stats
-   - Emits `transcription-complete` event with final text
-8. Frontend injects text, saves to local history
+6. User releases hotkey or presses again (toggle mode)
+7. Frontend calls `invoke('stop_recording')`
+8. Rust `stop_recording()`:
+   - Stops audio level emitter (`AtomicBool` flag)
+   - Stops streaming transcriber, collects partial results and consumed sample count
+   - Stops audio capture, gets full `AudioData`
+   - Trims tail audio (only un-transcribed portion for final inference)
+   - Runs final transcription on tail audio (or uses streaming results if complete)
+   - Applies `text::process_text()` (auto-capitalize)
+   - Applies `dictionary::apply_replacements()`
+   - Saves to `history::add_entry()`
+   - Records `stats::record_transcription()`
+   - Emits `transcription-complete` event
+   - Returns final text string
+9. Frontend receives text, calls `invoke('inject_text', { text })` to paste into active app
+10. Frontend saves to localStorage history (duplicate, legacy)
 
 **Settings Update Flow:**
 
-1. User changes setting in dashboard
-2. Frontend calls `updateSettings()` which invokes `update_settings` command
-3. Rust backend:
-   - Locks AppState
-   - Compares old vs new values for changes:
-     - Hotkey changed: Unregister old, register new
-     - Draggable changed: Re-position panel if disabled
-     - Model size changed: Preload new model in background
-     - Engine changed: Unload old, preload new
-     - Opacity changed: Apply to NSPanel
-   - Persists to disk via `settings::save_settings()`
-   - Emits `settings-changed` event
-4. Frontend receives event, reloads settings via store
+1. User changes setting in `SettingsPage.tsx`
+2. Zustand store calls `invoke('update_settings', { newSettings })`
+3. Rust `update_settings()` compares old vs new, triggers side effects:
+   - Hotkey changed: `hotkey::unregister_all()` then `hotkey::setup_hotkey()`
+   - Draggable changed to false: `native_position_on_cursor_monitor()` to snap back
+   - Opacity changed: `apply_panel_opacity()` on macOS NSPanel
+   - Engine changed: Unload old engine, preload new one in background thread
+   - Model size changed: Preload new model in background thread
+4. Persists via `settings::save_settings()`
+5. Emits `settings-changed` event to all windows
+6. Both windows reload settings via Zustand store
 
-**State Management:**
+**Multi-Monitor Positioning Flow (macOS):**
 
-- **Frontend State**: Zustand stores (simple, centralized)
-  - `useStore()`: Settings loaded once on mount, updated via events
-  - `useHistoryStore()`: Paginated loading (50 items per page)
-  - `useDictionaryStore()`: Dictionary entries
-  - `useStatsStore()`: Usage statistics
-  - Local state: Recording, processing, error messages (React useState)
+1. Frontend `App.tsx` runs 150ms polling interval calling `invoke('reposition_to_mouse_monitor')`
+2. Rust uses native `NSEvent.mouseLocation` and `NSScreen.screens` to find cursor's screen
+3. If widget center is on a different screen, repositions to bottom-center of cursor's screen
+4. Skipped when `settings.widget.draggable` is true (user controls position)
 
-- **Backend State**: AppState (Mutex-protected)
-  - `is_recording`: Bool flag
-  - `settings`: UserSettings clone (updated on settings command)
-  - `audio_level_emitter_running`: Arc<AtomicBool> for thread coordination
-  - Thread-safe via Mutex locks
+## State Management
+
+**Frontend State:**
+- `useStore()` (`src/lib/store.ts`): Settings loaded on mount, updated on `settings-changed` event
+- `useHistoryStore()` (`src/lib/historyStore.ts`): Paginated (50 per page), loaded on demand
+- `useDictionaryStore()` (`src/lib/dictionaryStore.ts`): Full list, CRUD via invoke
+- `useStatsStore()` (`src/lib/statsStore.ts`): Aggregated stats, loaded on demand
+- `ThemeProvider` (`src/lib/theme.tsx`): React Context for light/dark/system theme with localStorage persistence
+- Component-local state: `isRecording`, `isProcessing`, `audioLevel`, `error`, `isDownloadingModel`, `isPreloading` (React useState in `App.tsx`)
+- Refs used to avoid stale closures in event listeners: `isRecordingRef`, `isProcessingRef`, `settingsRef`
+
+**Backend State:**
+- `AppState` struct (managed by Tauri):
+  - `is_recording: Mutex<bool>` — prevents concurrent recordings
+  - `settings: Mutex<UserSettings>` — in-memory settings cache
+  - `audio_level_emitter_running: Arc<AtomicBool>` — thread coordination signal
+- Static globals in modules:
+  - `audio::capture`: `AUDIO_BUFFER`, `WHISPER_BUFFER`, `AUDIO_THREAD`, `SAMPLE_RATE`, `CHANNELS`, `CURRENT_AUDIO_LEVEL` (all `lazy_static! Mutex`)
+  - `transcription::whisper`: `MODEL_CACHE` (Lazy Mutex), `STATE_CACHE` (Lazy Mutex) for pre-created WhisperState
+  - `dictionary`: `DICTIONARY_CACHE` (Lazy RwLock) for read-heavy concurrent access
 
 ## Key Abstractions
 
-**UserSettings Struct:**
-- Purpose: Typed representation of all user configuration
-- Examples: `src/lib/store.ts`, `src-tauri/src/settings/mod.rs`
-- Pattern: Serde-serializable, with defaults and optional fields
-- Includes: TranscriptionSettings, HotkeySettings, OutputSettings, WidgetSettings
+**UserSettings:**
+- Purpose: Complete representation of all user preferences
+- Frontend: `src/lib/store.ts` (TypeScript interfaces)
+- Backend: `src-tauri/src/settings/mod.rs` (Rust structs with Serde Serialize/Deserialize)
+- Contains: `TranscriptionSettings`, `CleanupSettings`, `HotkeySettings`, `OutputSettings`, `WidgetSettings`
+- Pattern: Defaults via `Default` trait, optional fields with `Option<T>`, `#[serde(default)]` for backward compatibility
 
-**AudioData Struct:**
-- Purpose: Capsule for audio samples during recording
-- Contains: samples (f32 vector), sample_rate (u32), whisper_samples (optional tail)
-- Pattern: Passed between capture, processing, and transcription
+**AudioData:**
+- Purpose: Audio buffer passed through the recording pipeline
+- Location: `src-tauri/src/audio/capture.rs`
+- Fields: `samples: Vec<f32>`, `sample_rate: u32`, `channels: u16`, `whisper_samples: Option<Vec<f32>>` (pre-resampled 16kHz mono)
+- Pattern: Created by `stop_capture()`, consumed by transcription engines
 
-**TranscriptionEntry:**
-- Purpose: Single completed transcription record
-- Used by: History storage and API
-- Pattern: ID (UUID), text, word count, duration, timestamp, synced flag
+**Tauri Events:**
+- Purpose: Async backend-to-frontend notifications
+- Pattern: `app.emit("event-name", payload)` in Rust, `listen("event-name", callback)` in TypeScript
+- Lifecycle: Event listeners registered in `useEffect` hooks, cleanup functions returned and called on unmount
+- Critical pattern in `App.tsx`: Refs (`isRecordingRef`, etc.) prevent stale closures since event listeners capture values at registration time
 
-**Events (Tauri):**
-- Purpose: Async notifications from backend to frontend
-- Pattern: One-way pub/sub via `app.emit()` and `listen()`
-- Lifecycle: Registered in `useEffect` with cleanup in return
-- Risk: Stale closures if not using refs (handled in App.tsx with Refs)
+**Window Type Detection:**
+- Purpose: Single React app serves two window types
+- Pattern: `window.location.hash` check at mount time — empty or `#dictation` = overlay, `#dashboard` = management UI
+- Implementation: `getWindowType()` in `App.tsx`, `getInitialPage()` in `Dashboard.tsx`
+- Dashboard sub-navigation: hash format `#dashboard/settings`, `#dashboard/history`
 
 ## Entry Points
 
-**Frontend Entry Point:**
-- Location: `src/main.tsx`
-- Triggers: Browser load
-- Responsibilities: Mount React DOM at #root
+**Frontend Entry (`src/main.tsx`):**
+- Mounts React app at `#root` element
+- Wraps in `React.StrictMode`
+- No router — window type determined by hash
 
-**App Component:**
-- Location: `src/App.tsx`
-- Triggers: React render
-- Responsibilities:
-  - Determine window type (dictation vs dashboard) via URL hash
-  - Initialize event listeners (hotkey, audio level, transcription events)
-  - Manage recording/processing state
-  - Render DictationBar (overlay) or Dashboard (management UI)
-  - Handle settings sync across windows
+**App Component (`src/App.tsx`):**
+- Root component, ~325 lines
+- Determines window type once at mount (`useState(getWindowType)`)
+- If dictation: renders `DictationBar` with all recording state props
+- If dashboard: renders `Dashboard` component (which uses `ThemeProvider`)
+- Sets up all event listeners in a single `useEffect` block with cleanup
 
-**Tauri Setup:**
-- Location: `src-tauri/src/lib.rs` in `tauri::Builder`
-- Triggered: Application startup
-- Responsibilities:
-  - Create AppState with initial settings
-  - Create dictation and dashboard windows
-  - Setup hotkey system
-  - Register all Tauri commands
-  - Setup macOS NSPanel if applicable
-  - Initialize event listeners for inter-window communication
-  - Setup tray menu (if configured)
+**Rust Entry (`src-tauri/src/main.rs`):**
+- Minimal: calls `mentascribe_desktop::run()`
+- `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` hides console on Windows release builds
+
+**Rust Application Setup (`src-tauri/src/lib.rs::run()`):**
+- Initializes env_logger
+- Loads settings from disk
+- Builds `tauri::Builder` with plugins: shell, dialog, fs, http, global-shortcut, nspanel (macOS)
+- `setup()` closure:
+  - Registers global hotkey from settings
+  - Auto-detects CoreML on macOS and enables if supported
+  - Preloads configured speech model in background thread
+  - Shows dictation window, converts to NSPanel on macOS
+  - Positions dictation window at bottom-center of cursor's monitor
+  - Builds system tray with menu (Settings, History, Show/Hide Widget, Quit)
+  - Tray left-click opens dashboard, right-click shows menu
+- Registers all ~35 command handlers via `generate_handler![]`
+- Manages `AppState` via `.manage()`
 
 ## Error Handling
 
-**Strategy:** Result-based error propagation with user-facing messages
+**Strategy:** Result-based propagation in Rust, user-facing messages in frontend
 
-**Patterns:**
+**Rust Patterns:**
+- Module-level error enums with `thiserror::Error` derive: `WhisperError`, `AudioError`, `HotkeyError`, `InjectionError`, `SettingsError`, `HistoryError`, `DictionaryError`, `StatsError`, `ApiError`, `CloudError`
+- `#[tauri::command]` functions return `Result<T, String>` — errors mapped via `.map_err(|e| e.to_string())`
+- Critical paths use `eprintln!()` for immediate stderr output alongside `log::info/warn/error`
 
-- **Command Errors**: `#[tauri::command]` functions return `Result<T, String>` where error is serialized as string
-  - Example: `stop_recording()` returns `Result<String, String>` (text on success, error message on failure)
-  - Frontend catches and displays via error state
+**Frontend Patterns:**
+- Try/catch around `invoke()` calls
+- Error state with timed auto-clear (configurable timeouts in `src/config/widget.ts`)
+- Specific error detection: model not found triggers auto-download, mic busy shows retry message
+- Graceful degradation: history/stats save failures are logged but don't fail transcription
 
-- **Module Errors**: Custom error enums with thiserror
-  - Examples: WhisperError, HotkeyError, InjectionError, SettingsError
-  - Pattern: `#[error("description")]` on variants, map to String in commands
-
-- **Logging**: Rust logs via `log` crate (info/warn/error levels)
-  - Stderr output captured in console
-  - Frontend also logs to console via `console.error()`, `console.log()`
-
-- **User Feedback**:
-  - Recording errors: Show notification in UI, clear after timeout
-  - Model not found: Trigger auto-download, show progress
-  - Accessibility permission: Show clear message with system settings hint
+**User Feedback:**
+- Error messages displayed in DictationBar pill widget with auto-dismiss
+- Model download progress shown via `download-progress` events
+- Model preload status via banner in dashboard
 
 ## Cross-Cutting Concerns
 
 **Logging:**
-- Backend: `log` crate with env_logger (stderr)
-- Frontend: browser console.log()
-- Pattern: Eprintln for critical debug output during development, log:: for production
+- Backend: `log` crate with `env_logger` (levels via `RUST_LOG` env var), plus `eprintln!()` for critical debug output
+- Frontend: `console.log()` / `console.error()`, plus `invoke('frontend_log', { msg })` to forward to Rust stderr
 
 **Validation:**
-- Settings: Validated on update, defaults applied if missing
-- Audio: Sample rate validation (16000 Hz for Whisper)
-- Text: UTF-16 chunk size limits for injection (20 units max per event on macOS)
+- Settings: Optional fields with defaults, `#[serde(default)]` annotations for backward compatibility
+- Audio: Resampling to 16kHz mono required for Whisper (handled in `capture.rs` callback)
+- Text injection: macOS CGEvent limits to 20 UTF-16 code units per event (chunked in `injection/mod.rs`)
 
 **Authentication:**
-- API login function exists (`src-tauri/src/api/client.rs`)
-- Not heavily integrated (basic structure present)
-- Pattern: Keyring for secure token storage
+- Cloud API client at `src-tauri/src/api/client.rs` with login/token-refresh against `https://api.voice.mentaflux.ai/v1`
+- Token storage: OS keychain via `keyring` crate (`keyring::Entry::new("mentascribe", "tokens")`)
+- Not deeply integrated into the recording flow — login command exposed but not required for local transcription
 
 **Concurrency:**
-- Tauri commands run on background thread pool (non-blocking)
-- Audio capture: Separate thread via CPAL stream
-- Audio level emitter: Spawned thread with AtomicBool coordination
-- Model preloading: Background thread via std::thread::spawn
-- Pattern: Arc/Mutex for shared state, AtomicBool for signaling
+- Audio capture: CPAL callback thread + separate audio processing thread
+- Audio level emitter: `std::thread::spawn` with `AtomicBool` stop signal
+- Model preloading: Background `std::thread::spawn` with event emissions for progress
+- Streaming transcription: Background monitoring thread per engine
+- Shared state protection: `Mutex` for write-heavy state, `RwLock` for read-heavy dictionary cache
+- Pattern: `Arc<AtomicBool>` for thread signaling, `Mutex<Option<T>>` for optional resources
 
-**Platform-specific Code:**
-- Guarded by `#[cfg(target_os = "macos")]` and platform! macro
-- Separate module sections for Windows, Linux implementations
-- Example: injection/mod.rs has macOS (CGEvent), Windows (clipboard), Linux (X11) implementations
+**Platform-Specific Code:**
+- Gated by `#[cfg(target_os = "macos")]`, `#[cfg(target_os = "windows")]`, `#[cfg(target_os = "linux")]`
+- macOS-specific: NSPanel overlay, native drag via NSEvent monitors, CGEvent text injection, Core Graphics accessibility check, Metal GPU acceleration
+- Windows-specific: `clipboard-win` + `windows` crate for text injection
+- Linux-specific: `x11` crate with XTest for key simulation
+- Non-macOS stubs: `setup_dictation_panel()`, `refresh_panel_settings()`, `start_native_drag()` are no-ops
+
+## Process Model
+
+**Multi-process (Tauri architecture):**
+- Main process: Rust binary hosting Tauri runtime, WebView management, all backend logic
+- Renderer processes: WebView (WKWebView on macOS, WebView2 on Windows) per window
+- Two windows: `dictation` (always-on-top overlay) and `dashboard` (standard window, created on demand)
+- Thread model within main process:
+  - Main thread: Tauri event loop, command handlers
+  - Audio capture thread: CPAL stream callback
+  - Audio level emitter thread: 25ms polling loop
+  - Model preload thread: One-shot background loading
+  - Streaming transcription monitor thread: VAD-triggered inference
 
 ---
 
-*Architecture analysis: 2026-02-26*
+*Architecture analysis: 2026-04-05*

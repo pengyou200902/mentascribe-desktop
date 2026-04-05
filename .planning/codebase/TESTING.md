@@ -1,197 +1,261 @@
-# Testing Patterns
+# Testing Strategy
 
-**Analysis Date:** 2026-02-26
+**Analysis Date:** 2026-04-05
 
 ## Test Framework
 
-**Runner:**
-- Not explicitly configured in project
-- No `jest.config.*`, `vitest.config.*`, or test runner dependency found in `package.json`
-- Testing infrastructure: **Not detected** in frontend
+**Frontend (TypeScript/React):**
+- **No test framework is configured.** No Jest, Vitest, or any test runner exists in `package.json` dependencies or devDependencies.
+- No test configuration files (`jest.config.*`, `vitest.config.*`, `playwright.config.*`) exist.
+- No test-related npm scripts in `package.json`.
+- Zero frontend test files exist in the repository.
 
-**Assertion Library:**
-- Not detected
-
-**Rust Testing:**
+**Rust Backend:**
 - Built-in Rust test framework via `#[test]` attribute
-- Run command: `cargo test`
-- Located in source files alongside implementation code
-
-**Run Commands:**
-- Frontend: No test runner configured
-- Rust backend: `cargo test` (standard Rust testing)
-- No npm scripts for running tests in `package.json`
-
-## Test File Organization
-
-**Location:**
-- **Frontend:** No test files found in repository
-- **Rust:** Tests are co-located with implementation code using `#[cfg(test)]` module gates
-
-**Naming:**
-- Rust: Test functions named `test_*` (e.g., `test_capitalize_sentences`, `test_process_text_enabled`)
-
-**Structure:**
-- No separate test directories
-- Tests embedded in source files at bottom of module
+- No additional test dependencies (no `mockito`, `proptest`, `rstest`, etc. in `src-tauri/Cargo.toml`)
+- Tests are co-located with source code using `#[cfg(test)]` module gates
 
 ## Test Structure
 
-**Rust Test Organization:**
+**Frontend:** No tests exist. No test directory structure.
 
+**Rust backend test organization:**
+- Tests live at the bottom of source files inside `#[cfg(test)] mod tests { ... }`
+- Only one module has tests: `src-tauri/src/text/mod.rs`
+- Pattern:
+  ```rust
+  #[cfg(test)]
+  mod tests {
+      use super::*;
+
+      #[test]
+      fn test_function_name() {
+          assert_eq!(actual, expected);
+      }
+  }
+  ```
+
+## Test Types
+
+**Unit Tests (Rust only):**
+- Scope: Individual pure functions (text processing)
+- Location: `src-tauri/src/text/mod.rs`
+- Approach: Direct function calls with `assert_eq!` assertions
+- Example:
+  ```rust
+  #[test]
+  fn test_capitalize_sentences() {
+      assert_eq!(
+          capitalize_sentences("hello world"),
+          "Hello world"
+      );
+      assert_eq!(
+          capitalize_sentences("hello. how are you"),
+          "Hello. How are you"
+      );
+      assert_eq!(
+          capitalize_sentences("hello! what's up? not much"),
+          "Hello! What's up? Not much"
+      );
+  }
+
+  #[test]
+  fn test_process_text_disabled() {
+      assert_eq!(
+          process_text("hello world", false),
+          "hello world"
+      );
+  }
+
+  #[test]
+  fn test_process_text_enabled() {
+      assert_eq!(
+          process_text("hello world", true),
+          "Hello world"
+      );
+  }
+  ```
+
+**Integration Tests:** None exist for either frontend or backend.
+
+**E2E Tests:** None exist. No Playwright, Cypress, or Tauri-specific E2E framework.
+
+## Coverage
+
+**Requirements:** No coverage targets enforced.
+
+**Current state:**
+- Frontend: 0% (no test infrastructure)
+- Rust: Only `src-tauri/src/text/mod.rs` has any tests. All other modules (audio, transcription, settings, history, dictionary, stats, injection, hotkey, api) have zero test coverage.
+
+**Coverage tooling:** Not configured. Could use `cargo tarpaulin` for Rust.
+
+## Test Patterns
+
+**Rust unit test pattern (the only pattern in use):**
 ```rust
-// From src-tauri/src/text/mod.rs
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_capitalize_sentences() {
-        assert_eq!(
-            capitalize_sentences("hello world"),
-            "Hello world"
-        );
-        assert_eq!(
-            capitalize_sentences("hello. how are you"),
-            "Hello. How are you"
-        );
-        assert_eq!(
-            capitalize_sentences("hello! what's up? not much"),
-            "Hello! What's up? Not much"
-        );
-    }
+    fn test_specific_behavior() {
+        // Arrange: inline test data
+        let input = "hello world";
 
-    #[test]
-    fn test_process_text_disabled() {
-        assert_eq!(
-            process_text("hello world", false),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn test_process_text_enabled() {
-        assert_eq!(
-            process_text("hello world", true),
-            "Hello world"
-        );
+        // Act + Assert combined
+        assert_eq!(function_under_test(input, true), "Hello world");
     }
 }
 ```
 
-**Patterns:**
-- Each test is a separate `#[test]` function
-- Multiple assertions per test function (test multiple scenarios in one function)
-- Direct imports via `use super::*;` to access functions being tested
-- Simple `assert_eq!` for comparing expected vs. actual output
+**Characteristics:**
+- No setup/teardown (no `#[cfg(test)]` fixtures)
+- No mocking framework
+- Multiple assertions per test function (testing multiple scenarios)
+- Pure function testing only (no I/O, no file system, no network)
+- No async test support used
 
-## Mocking
+## Running Tests
 
-**Framework:** Not detected for frontend
+```bash
+# Rust backend tests (the only tests that exist)
+cd src-tauri && cargo test
 
-**Rust Testing:**
-- No mocking framework detected (no `mockito` or similar in dependencies)
-- Pure unit tests of deterministic functions (e.g., text capitalization)
-- Tests call functions directly without mocking external dependencies
-
-**What to Mock:**
-- Frontend: Not applicable (no test framework)
-- Rust: For integration tests requiring external resources (file I/O, network), tests would need to use `#[ignore]` or be skipped in CI
-
-**What NOT to Mock:**
-- Internal pure functions are tested directly without mocks
-
-## Fixtures and Factories
-
-**Test Data:**
-- No explicit test fixtures or factories detected
-- Test data created inline in test assertions:
-
-```rust
-// Direct string literals in assertions
-assert_eq!(
-    capitalize_sentences("hello. how are you"),
-    "Hello. How are you"
-);
+# Frontend - NO test commands exist
+# npm run test    <-- does not exist
+# npm run lint    <-- linting only, not testing
+# npm run typecheck  <-- type checking only
 ```
 
-**Location:**
-- Not applicable; no dedicated fixture infrastructure
+## CI/CD Testing
 
-## Coverage
+**No CI/CD pipeline exists.** No `.github/workflows/`, no `.gitlab-ci.yml`, no `Jenkinsfile`, or any other CI configuration detected.
 
-**Requirements:** Not enforced
+Tests are run manually (if at all) via `cargo test` in the `src-tauri/` directory.
 
-**View Coverage:**
-- No coverage tooling configured
-- Frontend: No test infrastructure to measure coverage
-- Rust: Can run with `cargo tarpaulin` (not configured by default)
+## Untested Areas (Prioritized)
 
-## Test Types
+**High priority -- pure logic that is easily testable:**
+- `src-tauri/src/settings/mod.rs`: Settings serialization/deserialization, default value logic
+- `src-tauri/src/history/mod.rs`: History CRUD operations, pagination logic
+- `src-tauri/src/dictionary/mod.rs`: Dictionary entry management, toggle logic
+- `src-tauri/src/stats/mod.rs`: Stats calculation, streak logic, daily aggregation
+- `src-tauri/src/audio/vad.rs`: Voice activity detection thresholds
 
-**Unit Tests:**
-- **Scope:** Individual pure functions
-- **Approach:** Direct function calls with assertions
-- **Example:** `src-tauri/src/text/mod.rs` tests text processing functions (`capitalize_sentences`, `process_text`)
-- **Current coverage:** Only one module (`text`) has unit tests
+**Medium priority -- Zustand stores (would need Vitest + mocked Tauri invoke):**
+- `src/lib/store.ts`: Settings load/update
+- `src/lib/historyStore.ts`: Pagination, optimistic updates, guard clauses
+- `src/lib/dictionaryStore.ts`: CRUD operations, toggle logic
+- `src/lib/statsStore.ts`: Stats loading, default fallback
 
-**Integration Tests:**
-- **Scope:** Not detected
-- **Approach:** No integration test infrastructure found
+**Lower priority -- UI components (would need @testing-library/react):**
+- `src/components/DictationBar.tsx`: State transitions, waveform rendering
+- `src/components/dashboard/HomePage.tsx`: Stats display, date grouping
+- `src/components/dashboard/HistoryPage.tsx`: Copy/delete interactions
+- `src/components/dashboard/DictionaryPage.tsx`: Modal flow, entry editing
 
-**E2E Tests:**
-- **Framework:** Not used
-- **Rationale:** Tauri app requires macOS/platform-specific UI testing; manual testing likely used instead
+## Recommendations for Adding Tests
 
-## Common Patterns
+**1. Add Vitest for frontend testing:**
+```bash
+npm install -D vitest @testing-library/react @testing-library/jest-dom jsdom
+```
+Add to `vite.config.ts`:
+```typescript
+export default defineConfig({
+  // ...existing config
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+  },
+});
+```
+Add to `package.json` scripts:
+```json
+"test": "vitest",
+"test:run": "vitest run",
+"test:coverage": "vitest run --coverage"
+```
 
-**Async Testing:**
-- Not applicable for TypeScript (no test framework configured)
-- Rust async testing: Not present in codebase (async functions exist but no tests)
+**2. Mock Tauri invoke for store tests:**
+```typescript
+// src/test/setup.ts
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
 
-**Error Testing:**
-- Not detected in existing tests
-- For Rust, errors can be tested with `#[should_panic]` attribute (not currently used)
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+```
 
+**3. Zustand store test pattern:**
+```typescript
+// src/lib/__tests__/historyStore.test.ts
+import { invoke } from '@tauri-apps/api/core';
+import { useHistoryStore } from '../historyStore';
+
+vi.mocked(invoke).mockResolvedValue([]);
+
+describe('useHistoryStore', () => {
+  beforeEach(() => {
+    useHistoryStore.setState({
+      entries: [],
+      totalCount: 0,
+      isLoading: false,
+      hasMore: true,
+      error: null,
+    });
+  });
+
+  it('loads history entries', async () => {
+    const mockEntries = [{ id: '1', text: 'hello', word_count: 1, duration_ms: 500, timestamp: '2026-01-01', synced: false }];
+    vi.mocked(invoke).mockResolvedValueOnce(mockEntries).mockResolvedValueOnce(1);
+
+    await useHistoryStore.getState().loadHistory();
+
+    expect(useHistoryStore.getState().entries).toEqual(mockEntries);
+    expect(useHistoryStore.getState().isLoading).toBe(false);
+  });
+
+  it('guards against concurrent loads', async () => {
+    useHistoryStore.setState({ isLoading: true });
+    await useHistoryStore.getState().loadHistory();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+```
+
+**4. Rust test expansion pattern:**
 ```rust
-// Pattern that could be used but isn't:
-#[test]
-#[should_panic(expected = "assertion failed")]
-fn test_error_case() {
-    panic!("assertion failed");
+// Add to src-tauri/src/history/mod.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_add_entry_to_empty_history() {
+        // Use temp directory for isolation
+        let entry = add_entry_to_data(
+            &mut HistoryData::default(),
+            "Hello world".to_string(),
+            2,
+            1500,
+        );
+        assert_eq!(entry.text, "Hello world");
+        assert_eq!(entry.word_count, 2);
+    }
 }
 ```
 
-## Missing Testing Infrastructure
-
-**Frontend:**
-- No test runner (Jest, Vitest, etc.)
-- No test files for React components
-- Components like `DictationBar.tsx`, `Settings.tsx` are untested
-- Zustand stores in `src/lib/store.ts`, `src/lib/historyStore.ts`, etc. are untested
-
-**Rust Backend:**
-- Only one module (`text/mod.rs`) has tests
-- Large modules like `src-tauri/src/audio/capture.rs`, `src-tauri/src/transcription/whisper.rs` are untested
-- Settings I/O, history management, dictionary operations have no tests
-
-**Recommendations for Adding Tests:**
-
-1. **Frontend Testing Setup:**
-   - Add Vitest or Jest to devDependencies
-   - Create `__tests__` or `.test.tsx` files next to components
-   - Test React components with @testing-library/react
-
-2. **Rust Backend Testing:**
-   - Add unit tests for pure functions in each module
-   - Test error paths for settings I/O
-   - Add integration tests for Tauri command handlers
-
-3. **Test File Locations (proposed):**
-   - TypeScript: `src/components/__tests__/DictationBar.test.tsx`
-   - TypeScript: `src/lib/__tests__/store.test.ts`
-   - Rust: Inline tests in each `.rs` file under `#[cfg(test)]` module
+**5. Test file naming and location:**
+- Frontend: co-located `*.test.ts` / `*.test.tsx` files next to source (e.g., `src/lib/historyStore.test.ts`)
+- Rust: inline `#[cfg(test)] mod tests` at bottom of each module file
 
 ---
 
-*Testing analysis: 2026-02-26*
+*Testing analysis: 2026-04-05*

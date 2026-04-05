@@ -1,284 +1,284 @@
-# Codebase Concerns
+# Technical Concerns
 
-**Analysis Date:** 2026-02-26
+**Analysis Date:** 2026-04-05
 
-## Tech Debt
+## Security
 
-### Cloud Transcription APIs Not Implemented
+### API Key Stored as Plaintext JSON on Disk
 
-**Issue:** Cloud transcription providers (OpenAI Whisper, AWS Transcribe, AssemblyAI) are stubbed but non-functional.
+- **Risk:** The `CleanupSettings.api_key` field in `src-tauri/src/settings/mod.rs` (line 36) is serialized directly to `~/.config/mentascribe/settings.json` as plaintext. Any process with read access to the user's home directory can extract it.
+- **Files:** `src-tauri/src/settings/mod.rs`, `src/components/dashboard/SettingsPage.tsx` (line 1748-1750), `src/lib/store.ts` (line 19)
+- **Current mitigation:** File-level OS permissions only. The `keyring` crate is already a dependency and used for auth tokens in `src-tauri/src/api/client.rs` (lines 167-216).
+- **Fix approach:** Move `api_key` to the OS keychain via the existing `keyring` crate. Add `#[serde(skip_serializing)]` to prevent accidental disk persistence. Frontend should call a dedicated `set_cleanup_api_key` command that writes to keychain, and a `get_cleanup_api_key` command that reads from it.
 
-**Files:** `src-tauri/src/transcription/cloud.rs`
+### Auth Tokens Sent Over HTTPS but Never Validated for Expiry Client-Side
 
-**Impact:** Users cannot use cloud-based transcription fallback. Settings accept `cloud_provider` configuration but invocation returns "not yet implemented" errors.
+- **Risk:** `src-tauri/src/api/client.rs` stores `access_token` and `refresh_token` via keychain but the app never checks `expires_in` before using the access token. Expired tokens result in 401 errors that aren't automatically refreshed.
+- **Files:** `src-tauri/src/api/client.rs` (lines 39-77, 79-114), `src-tauri/src/api/mod.rs`
+- **Fix approach:** Store `expires_at` timestamp alongside tokens. Before API calls, check if token is expired and auto-refresh using `refresh_token()`. Implement retry-with-refresh middleware.
 
-**Fix approach:**
-- Implement multipart form upload for OpenAI Whisper API in `transcribe_openai()` (lines 52-66)
-- Add AWS Transcribe SDK integration in `transcribe_aws()` (lines 68-77)
-- Add AssemblyAI API client in `transcribe_assemblyai()` (lines 79-87)
-- Each should handle auth via environment variables and return transcribed text
+### CSP Allows `unsafe-inline` for Styles
+
+- **Risk:** The Content Security Policy in `src-tauri/tauri.conf.json` (line 47) includes `style-src 'self' 'unsafe-inline'`, which weakens XSS protections.
+- **Files:** `src-tauri/tauri.conf.json`
+- **Current mitigation:** Desktop app with no user-provided HTML content reduces attack surface significantly.
+- **Fix approach:** Migrate inline styles to CSS classes or use style nonces if Tauri supports them. Low priority given the desktop context.
+
+### Multiple `unsafe impl Send` Declarations
+
+- **Risk:** Four manual `unsafe impl Send` declarations bypass Rust's thread-safety guarantees:
+  - `NativeDragState` in `src-tauri/src/lib.rs` (line 826)
+  - `SendableVadContext` in `src-tauri/src/transcription/whisper.rs` (line 476)
+  - `VoxtralContext` in `src-tauri/src/transcription/voxtral_ffi.rs` (line 71)
+  - `VoxtralStream` in `src-tauri/src/transcription/voxtral_ffi.rs` (line 160)
+- **Current mitigation:** All are documented with safety rationale and accessed behind `Mutex` locks.
+- **Fix approach:** Wrap raw pointers in `NonNull` or use `Arc`-based reference counting where possible. For `NativeDragState`, consider using `objc2` crate which provides sound Send/Sync guarantees for ObjC objects.
+
+## Performance
+
+### 150ms Monitor Polling Loop
+
+- **Problem:** `src/App.tsx` (lines 163-191) polls `reposition_to_mouse_monitor` every 150ms via `setInterval`. This Tauri IPC round-trip runs continuously even when the widget is stationary on a single monitor.
+- **Files:** `src/App.tsx` (line 184), `src-tauri/src/lib.rs` (lines 1303-1370: `reposition_to_mouse_monitor`)
+- **Impact:** Unnecessary CPU wake-ups and IPC overhead. On macOS, each poll involves NSEvent.mouseLocation + NSScreen iteration + panel frame query.
+- **Fix approach:** Use native mouse-move event monitoring (NSEvent addGlobalMonitorForEventsMatchingMask with NSMouseMoved mask) to trigger repositioning only when the cursor actually moves across monitor boundaries. Replace polling with event-driven notification.
+
+### Audio Resampling Fallback Blocks Stop Recording
+
+- **Problem:** If the rubato real-time resampler fails during capture, `prepare_for_whisper()` in `src-tauri/src/audio/capture.rs` (lines 516-573) falls back to a synchronous post-stop resampling pass over the entire recording.
+- **Files:** `src-tauri/src/audio/capture.rs` (lines 575-653: `resample()` and `resample_linear()`)
+- **Impact:** On a 30-second recording at 48kHz, the fallback resampler adds 50-200ms of blocking latency to `stop_recording()`, delaying text injection.
+- **Fix approach:** Move fallback resampling to the dedicated transcription thread (where Whisper inference already runs) so the UI thread isn't blocked.
+
+### Dictionary Regex Compilation on Every Transcription
+
+- **Problem:** `apply_replacements()` in `src-tauri/src/dictionary/mod.rs` (lines 178-196) compiles a new `regex::Regex` for each dictionary entry on every transcription call.
+- **Files:** `src-tauri/src/dictionary/mod.rs` (lines 189-191)
+- **Impact:** With many dictionary entries, regex compilation overhead adds up. Regex compilation is O(n) where n is pattern length.
+- **Fix approach:** Pre-compile regexes when dictionary entries change and cache them alongside the `DICTIONARY_CACHE`. Use `regex::RegexSet` for batch matching if applicable.
+
+## Technical Debt
+
+### Cloud Transcription APIs Are Stubs
+
+- **Issue:** All three cloud providers (OpenAI, AWS, AssemblyAI) in `src-tauri/src/transcription/cloud.rs` return hardcoded error messages.
+- **Files:** `src-tauri/src/transcription/cloud.rs` (lines 52-88: `transcribe_openai()`, `transcribe_aws()`, `transcribe_assemblyai()`)
+- **TODOs:** Lines 59, 72, 83 contain explicit `// TODO: Implement` markers.
+- **Impact:** Users see cloud provider options in settings but they are non-functional. The `cloud_provider` field in `TranscriptionSettings` accepts values that cannot be used.
+- **Fix approach:** Either implement the OpenAI Whisper API call (multipart form upload, most straightforward) or remove the cloud provider options from the UI until implemented. The `audio_to_wav()` helper at line 91 is already written and functional.
+
+### Dual History Storage: Backend JSON + Frontend localStorage
+
+- **Issue:** Transcription history is stored in two places:
+  1. Backend: `~/.config/mentascribe/history.json` via `src-tauri/src/history/mod.rs`
+  2. Frontend: `localStorage` via `src/App.tsx` (lines 32-46) `saveToHistory()` callback
+- **Files:** `src-tauri/src/history/mod.rs`, `src/App.tsx` (lines 30-46), `src/components/History.tsx` (lines 19, 49)
+- **Impact:** Data inconsistency. The dashboard (`HistoryPage.tsx`) reads from the backend via IPC, while the old `History.tsx` component reads from localStorage. Deletions in one store don't propagate to the other.
+- **Fix approach:** Remove the localStorage-based history entirely. The backend `history::add_entry()` is already called during `stop_recording()` in `src-tauri/src/lib.rs` (line 397). Delete the `saveToHistory` callback and the `History.tsx` component's localStorage usage.
 
 ### Global Mutable State via lazy_static / once_cell
 
-**Issue:** Extensive use of global `Mutex`-wrapped statics for transcription, audio, and UI state.
+- **Issue:** The codebase uses 15+ global `Mutex`-wrapped statics for audio, transcription, and UI state.
+- **Files:**
+  - `src-tauri/src/audio/capture.rs` (lines 52-65): `AUDIO_BUFFER`, `WHISPER_BUFFER`, `AUDIO_THREAD`, `SAMPLE_RATE`, `CHANNELS`, `CURRENT_AUDIO_LEVEL`, `IS_STOPPING`, `RESAMPLER_STATE`
+  - `src-tauri/src/transcription/whisper.rs` (lines 21, 38, 480, 597, 601, 609, 976): `MODEL_CACHE`, `STATE_CACHE`, `VAD_CACHE`, `STREAMING_RESULTS`, `STREAMING_CONSUMED`, `VAD_MONITOR`, `TRANSCRIPTION_TX`
+  - `src-tauri/src/transcription/voxtral.rs`: `VOXTRAL_CACHE`, `VOXTRAL_STREAMING_RESULTS`, `VOXTRAL_STREAM_HANDLE`
+  - `src-tauri/src/lib.rs` (line 829): `NATIVE_DRAG_STATE`
+- **Impact:** Difficult to test in isolation, risk of deadlocks if lock ordering isn't consistent, state cleanup relies on OS process termination.
+- **Fix approach:** Consolidate related state into struct-based managers (e.g., `AudioCaptureManager`, `TranscriptionManager`) and inject them through Tauri's `manage()` system. This enables per-test isolation and explicit lifetime management.
 
-**Files:**
-- `src-tauri/src/audio/capture.rs` (lines 52-65): `AUDIO_BUFFER`, `WHISPER_BUFFER`, `AUDIO_THREAD`, `SAMPLE_RATE`, `CHANNELS`, `CURRENT_AUDIO_LEVEL`, `IS_STOPPING`, `RESAMPLER_STATE`
-- `src-tauri/src/transcription/whisper.rs` (lines 21, 38, 480, 597, 601, 609): `MODEL_CACHE`, `STATE_CACHE`, `VAD_CACHE`, `STREAMING_RESULTS`, `STREAMING_CONSUMED`, `VAD_MONITOR`
-- `src-tauri/src/transcription/voxtral.rs` (lines 218, 341, 353): `VOXTRAL_CACHE`, `VOXTRAL_STREAMING_RESULTS`, `VOXTRAL_STREAM_HANDLE`
-- `src-tauri/src/lib.rs` (line 829): `NATIVE_DRAG_STATE`
+### `lib.rs` Is 1669 Lines with Mixed Concerns
 
-**Impact:**
-- Difficult to reason about state ownership and initialization order
-- Risk of deadlocks if multiple threads try to lock related statics simultaneously
-- State cleanup on app exit is implicit (relies on OS cleanup)
-- Cannot easily unit test code that depends on these statics
+- **Issue:** `src-tauri/src/lib.rs` contains Tauri command handlers, macOS NSPanel management, native drag implementation, window positioning, tray menu setup, and app initialization all in one file.
+- **Files:** `src-tauri/src/lib.rs`
+- **Impact:** Hard to navigate, high merge conflict risk, difficult to understand responsibility boundaries.
+- **Fix approach:** Extract into modules:
+  - `src-tauri/src/commands/` for Tauri command handlers
+  - `src-tauri/src/window/` for panel, positioning, and drag logic
+  - `src-tauri/src/tray/` for system tray setup
+  - Keep `lib.rs` as the thin `run()` entry point
 
-**Fix approach:**
-- Consolidate audio/capture state into a single `AudioCaptureState` struct in `AppState`
-- Move transcription model caches into `AppState` with explicit lifetime management
-- Create a dedicated `NativeDragManager` struct to encapsulate drag state instead of static `Mutex`
-- Use `.ok()` error suppression more strategically for non-critical lock failures
+## Scalability
 
-## Known Bugs
+### Audio Buffers Fixed at 30 Seconds
 
-### macOS Mixed-DPI Coordinate Space Bug (Tauri #7890)
+- **Current capacity:** `AUDIO_BUFFER` pre-allocates for 30s at 48kHz stereo (2.88M samples), `WHISPER_BUFFER` for 30s at 16kHz mono (480K samples), in `src-tauri/src/audio/capture.rs` (lines 152-162).
+- **Limit:** Recordings beyond ~30s trigger Vec reallocation during the real-time CPAL callback, risking audio dropouts and latency spikes.
+- **Fix approach:** Either enforce a max recording duration (with UI warning) or switch to a ring buffer that overwrites oldest data. Alternatively, increase pre-allocation to match a configurable max duration.
 
-**Symptoms:** Dictation panel positioning fails or moves to wrong monitor on systems with mixed-DPI displays (e.g., Retina laptop + external 1x monitors).
+### History JSON File Grows Unbounded (Up to 500 Entries)
 
-**Files:** `src-tauri/src/lib.rs` (lines 1068-1175: `native_position_on_cursor_monitor()`)
+- **Current capacity:** `src-tauri/src/history/mod.rs` (line 77) truncates at 500 entries, but each entry stores the full transcription text.
+- **Limit:** Long transcriptions (thousands of words each) can push `history.json` to several MB. Every `add_entry()` call reads the entire file from disk, deserializes, prepends, re-serializes, and writes back (lines 62-83).
+- **Fix approach:** Use SQLite (via `rusqlite`) for history storage. This eliminates full-file reads/writes and enables efficient pagination.
 
-**Trigger:** Using cursor movement to trigger repositioning on multi-monitor setups where monitors have different pixel densities.
+### Stats Daily History Kept at 30 Days
 
-**Current mitigation:** Fully bypassed by using NSEvent.mouseLocation + NSScreen APIs directly in AppKit coordinate space (bottom-left origin). This avoids Tauri's buggy coordinate conversion layer. Code is working but demonstrates the underlying platform incompatibility.
+- **Current capacity:** `src-tauri/src/stats/mod.rs` (line 119) truncates `daily_history` to 30 entries.
+- **Limit:** Users lose stats data older than 30 days with no export mechanism.
+- **Fix approach:** Increase retention or store aggregated monthly summaries. Add data export functionality.
 
-**Remaining risk:** If code switches back to Tauri's `cursor_position()` or `set_position()` methods, the bug will resurface. Comments at lines 1073-1075 document the specific Tauri issues.
+## Error Handling Gaps
 
-## Security Considerations
+### Pervasive `.unwrap()` on Mutex Locks
 
-### API Key Storage in Settings
+- **Problem:** Approximately 60 instances of `.lock().unwrap()` across the Rust codebase. If any lock is poisoned (e.g., a thread panicked while holding it), the application will panic.
+- **Files:** Concentrated in `src-tauri/src/audio/capture.rs` (22+ instances), `src-tauri/src/transcription/whisper.rs` (15+ instances), `src-tauri/src/transcription/voxtral.rs` (8+ instances).
+- **Impact:** A single panic in the audio thread poisons `AUDIO_BUFFER`'s Mutex. The next call to `start_capture()` or `stop_capture()` will propagate the panic, crashing the entire application.
+- **Fix approach:** Replace `.lock().unwrap()` with `.lock().unwrap_or_else(|e| e.into_inner())` (clear poisoned state) or `.lock().map_err()` with proper error propagation. The CPAL audio callback already uses `.try_lock()` correctly.
 
-**Risk:** Cloud provider API keys are stored in `src-tauri/src/settings/mod.rs` `CleanupSettings.api_key` field, serialized to disk as JSON.
+### `stop_recording()` Can Leave State Inconsistent on Error
 
-**Files:** `src-tauri/src/settings/mod.rs` (lines 30-40)
+- **Problem:** In `src-tauri/src/lib.rs` (lines 226-408), `stop_recording()` sets `is_recording = false` early (line 242), then proceeds through streaming stop, audio capture stop, transcription, and text injection. If any step fails, the recording state is already cleared but audio resources may not be properly released.
+- **Files:** `src-tauri/src/lib.rs` (lines 226-408)
+- **Impact:** After a transcription failure, the audio level emitter is stopped (line 233), streaming monitor is stopped, but if `stop_capture()` fails the audio thread may still be running while `is_recording` is false.
+- **Fix approach:** Implement a state machine with explicit transitions: `Recording -> Stopping -> Processing -> Idle`. Use an RAII guard that ensures cleanup runs regardless of which step fails.
 
-**Current mitigation:** Settings file lives in `~/.config/mentascribe/settings.json` (user-only permissions).
+### Model Download Has No Resume/Retry
 
-**Recommendations:**
-- Move sensitive API keys to system keychain (SecItem on macOS, Credential Manager on Windows)
-- Encrypt API keys at rest using a per-machine key
-- Never log or print API keys (add `#[serde(skip)]` attribute)
-- Document security model in settings module
+- **Problem:** `download_model()` in `src-tauri/src/transcription/whisper.rs` (lines 252-301) writes to a file directly as chunks arrive. If the download is interrupted (network failure, app closed), a partial file remains on disk.
+- **Files:** `src-tauri/src/transcription/whisper.rs` (lines 252-301, 334-431)
+- **Impact:** The partial file passes the `model_path.exists()` check, so the app thinks the model is downloaded. Loading a truncated model file causes a cryptic "Failed to load model" error.
+- **Fix approach:** Download to a `.tmp` file and rename atomically on completion. Before loading, validate file size against expected `ggml_size_bytes()`. Implement HTTP Range-based resume for partial downloads.
 
-### Unsafe FFI Blocks
+### Frontend Error Handling Swallows Details
 
-**Risk:** Multiple `unsafe` blocks calling Objective-C runtime APIs and C FFI functions without comprehensive bounds checking.
+- **Problem:** In `src/App.tsx`, error messages shown to users are generic (e.g., "Mic busy -- try again" on line 92, "Failed: {errorMessage}" on line 143). The actual error from the Rust backend is only logged to console.
+- **Files:** `src/App.tsx` (lines 82-94, 127-149)
+- **Impact:** Users cannot diagnose issues. Microphone permission errors, model corruption, and accessibility permission failures all show similar vague messages.
+- **Fix approach:** Categorize backend errors into user-actionable types (permission, model, hardware, network) and display targeted guidance (e.g., "Open System Settings > Privacy > Microphone to grant access").
 
-**Files:**
-- `src-tauri/src/lib.rs` (lines 850-928, 956-1048): NSEvent monitor installation, panel frame queries, setFrameOrigin calls
-- `src-tauri/src/injection/mod.rs` (lines 53, 92, 258, 285, 333, 471, 544): AX APIs, CGEvent, Unicode string injection, clipboard access
-- `src-tauri/src/audio/capture.rs` (lines 274-320): CPAL stream initialization
+### File Writes Are Not Atomic
 
-**Current mitigation:** Most unsafe blocks are properly documented with preconditions. Panel pointer is validated as `usize` before use.
+- **Problem:** All JSON data files (`settings.json`, `history.json`, `stats.json`, `dictionary.json`) are written via `std::fs::write()` which is not atomic. A crash during write produces a truncated or empty file.
+- **Files:** `src-tauri/src/settings/mod.rs` (line 112), `src-tauri/src/history/mod.rs` (line 56), `src-tauri/src/stats/mod.rs` (line 71), `src-tauri/src/dictionary/mod.rs` (line 65)
+- **Impact:** A crash or power loss during settings save could corrupt the settings file, causing the app to fail to start or lose all configuration.
+- **Fix approach:** Write to a `.tmp` file in the same directory, then rename (which is atomic on most filesystems). Keep one backup of the previous file as `.bak`.
 
-**Recommendations:**
-- Wrap unsafe FFI in validated newtype structs (e.g., `SafeNSPanel(usize)`)
-- Add runtime assertions before msg_send! calls where object pointers are involved
-- Consider using higher-level bindings (e.g., `cocoa` crate) instead of raw obj-c for message sends
+## Missing Features
 
-## Performance Bottlenecks
+### No Wayland Support on Linux
 
-### Audio Resampling Fallback on Real-time Failure
+- **Problem:** The Linux text injection implementation in `src-tauri/src/injection/mod.rs` (lines 621-666) uses X11 directly (XTestFakeKeyEvent). Wayland sessions return an explicit error.
+- **Files:** `src-tauri/src/injection/mod.rs` (lines 634-638: `is_wayland()`, line 643)
+- **Impact:** Users on modern Linux distributions defaulting to Wayland (Ubuntu 22.04+, Fedora 34+) cannot use text injection at all.
+- **Fix approach:** Implement Wayland text injection via `wtype` tool or `wl-clipboard` + `ydotool` combination. The `enigo` crate used for typing (line 937) may support Wayland in newer versions.
 
-**Problem:** If rubato resampler fails to process chunks in the CPAL callback, transcription falls back to post-stop resampling, which blocks stop_recording().
+### Hotkey Only Supports F1-F12
 
-**Files:** `src-tauri/src/audio/capture.rs` (lines 114-133: `drain_resampler()`, 220-227: fallback logging)
+- **Problem:** `parse_key_code()` in `src-tauri/src/hotkey/mod.rs` (lines 14-29) only maps F1-F12. No modifier key combinations, no letter keys, no special keys.
+- **Files:** `src-tauri/src/hotkey/mod.rs`
+- **Impact:** Users cannot bind dictation to commonly preferred shortcuts like Ctrl+Shift+D or media keys.
+- **Fix approach:** Parse modifier prefixes (Ctrl+, Alt+, Shift+, Super+) and support a broader key code mapping. The `tauri-plugin-global-shortcut` already supports `Modifiers` (line 36).
 
-**Cause:** Real-time resampling is I/O-bound and CPU-intensive; if it stalls, the callback's `try_lock()` on `RESAMPLER_STATE` will silently fail for some chunks.
+### No Cleanup LLM Integration (Despite Settings Existing)
 
-**Improvement path:**
-- Pre-allocate resampler output buffers to reduce allocations in hot path
-- Add metrics to track resampling success rate
-- Consider alternative resampling libraries (sinc vs polynomial) if cubic resampling is bottleneck
-- Profile callback timing to identify jitter sources
+- **Problem:** `CleanupSettings` in `src-tauri/src/settings/mod.rs` (lines 30-40) has fields for LLM-based text cleanup (provider, model, custom_endpoint, api_key, remove_filler, add_punctuation, format_paragraphs) but no transcription pipeline step uses them.
+- **Files:** `src-tauri/src/settings/mod.rs` (lines 30-40), `src/components/dashboard/SettingsPage.tsx` (exposes full cleanup UI)
+- **Impact:** Users can configure cleanup settings but enabling them has no effect on transcription output.
+- **Fix approach:** Add a `cleanup::process_text()` function that sends transcribed text to the configured LLM endpoint and applies the selected transformations. Call it in `stop_recording()` between transcription and text injection.
 
-### VAD (Voice Activity Detection) Streaming Interval
+## Dependency Risks
 
-**Problem:** Streaming transcription polls whisper_samples every 500ms (line 706 in whisper.rs). On slow hardware, VAD inference itself may take 300-500ms, causing back-to-back waits.
+### `tauri-nspanel` Pinned to Git Branch
 
-**Files:** `src-tauri/src/transcription/whisper.rs` (lines 682-862: `vad_monitor_loop()`)
+- **Risk:** `src-tauri/Cargo.toml` depends on `tauri-nspanel` via a git branch reference: `git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"`. This is a third-party plugin without guaranteed compatibility with Tauri updates.
+- **Impact:** Tauri v3 release will likely break this dependency. Build reproducibility depends on the git branch HEAD not changing.
+- **Fix approach:** Monitor for a published crate version. Pin to a specific commit hash instead of a branch. Prepare a fallback plan to implement NSPanel conversion directly using `cocoa` crate FFI.
 
-**Cause:** Hard-coded 500ms interval doesn't adapt to inference latency; no adaptive polling strategy.
+### `whisper-rs` Model Licensing
 
-**Improvement path:**
-- Measure VAD inference time and adjust poll interval dynamically
-- Queue multiple audio chunks ahead of time for overlapping processing
-- Consider lower-overhead VAD alternatives (e.g., Silero VAD if available in rustpython)
+- **Risk:** The `whisper-rs` crate bundles whisper.cpp which is MIT-licensed, but OpenAI Whisper models have varying license restrictions. The app downloads models directly from HuggingFace.
+- **Impact:** Commercial distribution may require audit of model-specific licenses (some are Apache 2.0, some have additional restrictions).
+- **Fix approach:** Document the license for each model in the model selection UI. Add a license acceptance step before first model download.
 
-## Fragile Areas
+### `reqwest` 0.11 Is Two Major Versions Behind
 
-### Transcription Mode Switching (Voxtral ↔ Whisper)
+- **Risk:** `src-tauri/Cargo.toml` pins `reqwest = "0.11"`. The current version is 0.12+. Version 0.11 uses `hyper` 0.14 which has known issues.
+- **Impact:** Missing security patches, performance improvements, and API features in newer reqwest versions.
+- **Fix approach:** Upgrade to `reqwest` 0.12. This may require updating the async runtime interface but is straightforward.
 
-**Files:** `src-tauri/src/lib.rs` (lines 501-538: model switching in `update_settings()`)
+### Broad `tokio` Feature Set
 
-**Why fragile:**
-- Switching engines during update_settings spawns background preload but doesn't block or await
-- If user starts recording before preload completes, wrong engine may be active
-- No state machine to enforce valid transitions (can't switch from recording → stopped → setting change → recording smoothly)
-- Voxtral unload (line 536) is a fire-and-forget call with no error handling
+- **Risk:** `Cargo.toml` enables `tokio` with `features = ["full"]`, pulling in every tokio feature (fs, signal, process, net, etc.) when the app only needs async runtime basics and oneshot channels.
+- **Impact:** Increased binary size and compile time.
+- **Fix approach:** Replace `"full"` with specific features needed: `["rt-multi-thread", "macros", "sync"]`.
 
-**Safe modification:**
-- Prevent settings updates while recording (check `is_recording` state before allowing change)
-- Wait for preload to complete before returning from update_settings, or emit "preload-start" event and block recording until "preload-complete"
-- Add explicit state enum for transcription engine readiness (Unloaded, Loading, Ready, Error)
+## Code Quality Issues
 
-### Audio Capture State Recovery
+### `SettingsPage.tsx` Is 1790 Lines
 
-**Problem:** If audio capture crashes or leaves buffers in inconsistent state, subsequent start_recording may succeed but produce garbage.
+- **Problem:** `src/components/dashboard/SettingsPage.tsx` is the largest frontend file at 1790 lines. It contains all settings sections (transcription, hotkey, output, widget, cleanup, model management, CoreML, Voxtral) in a single component.
+- **Impact:** Difficult to maintain, slow to navigate, challenging to add new settings sections.
+- **Fix approach:** Extract each settings section into its own component (e.g., `TranscriptionSettings.tsx`, `ModelManager.tsx`, `HotkeySettings.tsx`). Share state via props or a settings context.
 
-**Files:** `src-tauri/src/audio/capture.rs` (lines 82-91: `reset_state()`)
+### Inconsistent Error Propagation Pattern
 
-**Why fragile:**
-- reset_state() is not called automatically on error; relies on caller
-- AUDIO_THREAD cleanup is not atomic with buffer clearing; race window exists
-- IS_STOPPING flag can become "stuck true" if stop_capture panics
+- **Problem:** Tauri commands use `Result<T, String>` with `.map_err(|e| e.to_string())` throughout `src-tauri/src/lib.rs`. This discards error type information and stack context.
+- **Files:** `src-tauri/src/lib.rs` (nearly every `#[tauri::command]` function)
+- **Impact:** Frontend receives opaque error strings with no structured error codes. Cannot programmatically distinguish between "model not found" and "disk full" without string matching.
+- **Fix approach:** Define a `CommandError` enum with `serde::Serialize` that maps to structured JSON responses. Use `impl From<XError> for CommandError` for each module error type.
 
-**Safe modification:**
-- Add guard struct `AudioCaptureGuard` that calls reset_state() on drop
-- Use RAII pattern in start_capture to guarantee cleanup on early return
-- Add health check command that verifies AUDIO_THREAD state vs IS_STOPPING flag
+### Excessive `eprintln!` Debug Logging
 
-### NSPanel Native Drag Implementation
+- **Problem:** The codebase uses `eprintln!()` extensively for debug logging (~100+ instances) alongside the `log` crate. This means debug output always goes to stderr regardless of log level configuration.
+- **Files:** Throughout `src-tauri/src/lib.rs`, `src-tauri/src/audio/capture.rs`, `src-tauri/src/injection/mod.rs`
+- **Impact:** Release builds produce verbose stderr output that cannot be silenced via `env_logger` configuration. Performance impact from string formatting in hot paths (e.g., audio callback at line 260).
+- **Fix approach:** Replace `eprintln!()` with `log::debug!()` or `log::trace!()`. Keep `log::info!()` for important state transitions. Remove logging from the CPAL audio callback hot path.
 
-**Files:** `src-tauri/src/lib.rs` (lines 811-1051: drag state and monitor handlers)
+## Accessibility
 
-**Why fragile:**
-- `NATIVE_DRAG_STATE` global mutex is only guarded by `Ok()` error suppression in some paths
-- Panel pointer stored as `usize` is unsafe; if panel is deallocated, setFrameOrigin will crash
-- Deferred monitor removal via GCD dispatch_async_f has no timeout; if main thread stalls, monitors persist
-- No validation that monitors are actually removed before starting new drag
+### No Keyboard Navigation in Dashboard
 
-**Safe modification:**
-- Wrap panel reference in reference-counted container that notifies drag handler on dealloc
-- Use weak references instead of raw pointers
-- Add explicit timeout (100ms) for deferred cleanup; if not removed, warn and attempt immediate removal on next drag
-- Validate monitor IDs are non-zero before calling removeMonitor
+- **Problem:** The dashboard components (`src/components/dashboard/`) use click-based interaction without explicit keyboard navigation support (no `tabIndex`, `onKeyDown`, or ARIA attributes observed).
+- **Files:** `src/components/dashboard/Sidebar.tsx`, `src/components/dashboard/SettingsPage.tsx`, `src/components/dashboard/HistoryPage.tsx`, `src/components/dashboard/DictionaryPage.tsx`
+- **Impact:** Users who rely on keyboard navigation cannot effectively use the dashboard settings interface.
+- **Fix approach:** Add `tabIndex`, `role`, and `aria-label` attributes to interactive elements. Implement keyboard event handlers for custom components (sidebar navigation, dictionary entry management).
 
-### Hotkey Registration Persistence
+## Data Safety
 
-**Files:** `src-tauri/src/hotkey/mod.rs`, referenced in `src-tauri/src/lib.rs` (lines 446-498)
+### No Backup or Export for User Data
 
-**Why fragile:**
-- Old hotkey is unregistered, new one registered in update_settings, with no rollback on re-registration failure
-- If re-registration fails, app is left with no active hotkey but settings persisted with new (inactive) binding
-- No validation that hotkey string is valid before attempting registration
+- **Problem:** Settings, history (500 entries), stats (30 days), and dictionary data are stored as individual JSON files in `~/.config/mentascribe/` with no backup, export, or import functionality.
+- **Files:** `src-tauri/src/settings/mod.rs` (line 88), `src-tauri/src/history/mod.rs` (line 33), `src-tauri/src/stats/mod.rs` (line 48), `src-tauri/src/dictionary/mod.rs` (line 41)
+- **Impact:** OS reinstallation, home directory wipe, or file corruption results in total data loss. No way to transfer configuration between machines.
+- **Fix approach:** Add export/import commands that bundle all JSON files into a single archive. Implement auto-backup on app startup (copy current files to `~/.config/mentascribe/backup/`).
 
-**Safe modification:**
-- Register new hotkey first, validate success, then unregister old
-- On failure, emit error event and revert settings to previous hotkey
-- Add pre-validation of hotkey syntax against OS expectations
+### Concurrent File Access Has No Locking
 
-## Scaling Limits
-
-### Audio Buffer Pre-allocation Fixed Size
-
-**Capacity:** 30 seconds at 48kHz stereo for AUDIO_BUFFER, 30 seconds at 16kHz mono for WHISPER_BUFFER (lines 152-162 in capture.rs).
-
-**Limit:** Recordings longer than ~30s risk buffer reallocations during capture, causing audio dropouts.
-
-**Scaling path:**
-- Make buffer limits configurable (e.g., max recording time in settings)
-- Implement circular/ring buffer to allow unbounded recordings
-- Add memory usage monitoring to warn user if approaching system limits
-
-### VAD Streaming Monitor Queue Depth
-
-**Capacity:** STREAMING_RESULTS accumulates strings from VAD triggers; no size limit.
-
-**Limit:** Very long silences with many false-positive VAD triggers could accumulate thousands of segments, consuming memory and delaying stop_recording().
-
-**Scaling path:**
-- Add max queue depth with overflow behavior (drop oldest, warning, or stall)
-- Monitor queue size and emit metrics
-- Consider alternative silence-detection heuristics to reduce false triggers
-
-## Dependencies at Risk
-
-### Rust: whisper-rs without OpenAI License
-
-**Risk:** whisper-rs bundles GGML library which uses MIT license, but OpenAI Whisper models have non-commercial restrictions depending on model size.
-
-**Impact:** Shipping with Whisper in app violates OpenAI ToS if monetized or used commercially without explicit permission.
-
-**Migration plan:**
-- Audit model usage (local GGML vs cloud APIs)
-- Document licensing status in app about/legal section
-- Consider switching to Silero or other open-model alternatives
-
-### tauri-nspanel (Unmaintained)
-
-**Risk:** Plugin used for NSPanel support may not follow Tauri major version updates.
-
-**Impact:** Tauri v3+ release could break window management layer.
-
-**Migration plan:**
-- Monitor tauri-nspanel GitHub for Tauri v3 support
-- Fallback plan: implement NSPanel conversion directly in build.rs using cocoa FFI
+- **Problem:** History, stats, and dictionary files are read and written without file-level locks. If the dashboard window and dictation window both trigger writes simultaneously (e.g., dictation saves history while dashboard deletes an entry), data can be lost.
+- **Files:** `src-tauri/src/history/mod.rs` (lines 36-59: `load_history_data()` and `save_history_data()`), similar pattern in `src-tauri/src/stats/mod.rs` and `src-tauri/src/dictionary/mod.rs`
+- **Impact:** Race condition: Window A reads file, Window B reads same file, Window A writes, Window B writes (overwriting A's changes).
+- **Fix approach:** Use file-level advisory locks (`fs2` crate) or switch to SQLite which handles concurrent access natively. Alternatively, route all data mutations through the Tauri backend where a Mutex can serialize access.
 
 ## Test Coverage Gaps
 
-### Audio Capture Thread Lifecycle
+### No Automated Tests for Frontend
 
-**What's not tested:**
-- stop_capture() behavior when capture hasn't been started
-- RESAMPLER_STATE cleanup when real-time resampling fails mid-recording
-- Audio callback behavior on device disconnect/reconnect
+- **What's not tested:** Zero test files exist in `src/`. No jest, vitest, or any test framework configuration present.
+- **Files:** All of `src/components/`, `src/lib/`, `src/App.tsx`
+- **Risk:** UI regressions, state management bugs, and event handler issues are caught only by manual testing.
+- **Priority:** Medium -- the frontend is primarily declarative UI with state management via zustand; high-risk logic lives in the Rust backend.
 
-**Files:** `src-tauri/src/audio/capture.rs`
+### Minimal Rust Tests (Only `text/mod.rs`)
 
-**Risk:** Edge cases in thread spawning/joining could silently fail or cause panics.
+- **What's tested:** Only `src-tauri/src/text/mod.rs` has tests (3 unit tests for `capitalize_sentences` and `process_text`).
+- **What's not tested:**
+  - Audio capture start/stop lifecycle (`src-tauri/src/audio/capture.rs`)
+  - Dictionary regex replacement with edge cases (`src-tauri/src/dictionary/mod.rs`)
+  - History truncation and pagination (`src-tauri/src/history/mod.rs`)
+  - Stats streak calculation (`src-tauri/src/stats/mod.rs`)
+  - Settings serialization round-trip (`src-tauri/src/settings/mod.rs`)
+  - Hotkey key code parsing (`src-tauri/src/hotkey/mod.rs`)
+- **Risk:** Core business logic (text processing, data persistence, configuration) has no regression safety net.
+- **Priority:** High -- dictionary replacement, stats streak logic, and history pagination are pure functions that are trivial to test but critical to correctness.
 
-**Priority:** High — audio capture is core to all functionality
+### No Integration Tests for Tauri IPC
 
-### Native Drag State Cleanup
-
-**What's not tested:**
-- Monitors are actually removed after mouseup on all screen configurations
-- Panel is still valid when drag handler accesses it
-- Multiple sequential drags don't leave dangling monitor IDs
-
-**Files:** `src-tauri/src/lib.rs` (lines 811-1051)
-
-**Risk:** Monitor handle leaks could cause memory growth or event loop saturation over time.
-
-**Priority:** Medium — affects repeated interaction (dragging during long sessions)
-
-### Transcription Engine Switching Under Load
-
-**What's not tested:**
-- Switching engines while recording (should block or queue)
-- Switching engines while model preload is in progress
-- Switching back and forth rapidly
-
-**Files:** `src-tauri/src/lib.rs` (lines 501-538)
-
-**Risk:** Race conditions could activate wrong engine mid-transcription.
-
-**Priority:** High — directly impacts transcription quality
-
-### Error Propagation in Recording Lifecycle
-
-**What's not tested:**
-- start_recording() failure rolls back all state (is_recording, audio thread, emitters)
-- stop_recording() failure doesn't corrupt STREAMING_RESULTS or audio buffers
-- Failure in stop_recording() before Mutex acquisition doesn't deadlock
-
-**Files:** `src-tauri/src/lib.rs` (lines 142-400)
-
-**Risk:** Partial state corruption could leave app in unrecoverable state.
-
-**Priority:** High — cascading failures critical to user experience
+- **What's not tested:** The 30+ Tauri commands in `src-tauri/src/lib.rs` (lines 1625-1666) have no integration tests verifying that frontend invocations produce correct backend responses.
+- **Risk:** Serialization mismatches between Rust structs and TypeScript interfaces (e.g., `src/types/index.ts` vs `src-tauri/src/history/mod.rs`) would only be caught at runtime.
+- **Priority:** Medium -- TypeScript types mirror Rust structs manually, so drift is possible.
 
 ---
 
-*Concerns audit: 2026-02-26*
+*Concerns audit: 2026-04-05*
