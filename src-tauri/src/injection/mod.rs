@@ -462,6 +462,51 @@ mod platform {
         true
     }
 
+    // ── Foreground app detection ──────────────────────────────────────────
+
+    /// Get the executable name of the foreground window's process.
+    /// Returns lowercase exe name (e.g. "warp.exe") or None.
+    pub fn foreground_exe_name() -> Option<String> {
+        use windows::Win32::Foundation::{CloseHandle, MAX_PATH};
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0 == 0 { return None; }
+
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 { return None; }
+
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buf = [0u16; MAX_PATH as usize];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
+            CloseHandle(handle).ok();
+            if ok.is_err() { return None; }
+
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            path.rsplit('\\').next().map(|s| s.to_lowercase())
+        }
+    }
+
+    /// Returns true if the given exe name is a terminal/GPU-rendered app where
+    /// SendInput KEYEVENTF_UNICODE (VK_PACKET) doesn't work.
+    /// These apps use winit or custom input pipelines that drop VK_PACKET events.
+    pub fn is_terminal_app(exe_name: &str) -> bool {
+        matches!(
+            exe_name,
+            "warp.exe"
+            | "alacritty.exe"
+            | "wezterm-gui.exe"
+            | "wezterm.exe"
+            | "kitty.exe"
+            | "hyper.exe"
+            | "rio.exe"
+        )
+    }
+
     pub fn simulate_paste() -> Result<(), super::InjectionError> {
         let inputs: [INPUT; 4] = [
             make_key_input(VK_CONTROL, false),
@@ -867,7 +912,12 @@ fn inject_auto_macos(text: &str) -> Result<(), InjectionError> {
     Ok(())
 }
 
-/// Windows auto mode: SendInput KEYEVENTF_UNICODE → clipboard save/paste/restore
+/// Windows auto mode: detect app → SendInput KEYEVENTF_UNICODE → clipboard save/paste/restore
+///
+/// GPU-rendered terminals (Warp, Alacritty, WezTerm, etc.) use winit which maps
+/// VK_PACKET (from KEYEVENTF_UNICODE) to Key::Unidentified, silently dropping text.
+/// For these apps, skip SendInput and go straight to clipboard paste — same strategy
+/// as macOS's inject_auto_macos() which detects terminals and skips CGEvent typing.
 #[cfg(target_os = "windows")]
 fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
     // Clear any stuck modifier keys from the hotkey that triggered dictation.
@@ -876,8 +926,16 @@ fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
     platform::clear_modifier_keys();
     std::thread::sleep(std::time::Duration::from_millis(30));
 
-    // Tier 1: SendInput for text up to ~2000 chars
-    if text.chars().count() <= 2000 {
+    // Detect foreground app — skip SendInput for terminals/GPU-rendered apps
+    let exe_name = platform::foreground_exe_name().unwrap_or_default();
+    let is_terminal = platform::is_terminal_app(&exe_name);
+    eprintln!(
+        "[inject_auto] Foreground app: '{}', is_terminal={}",
+        exe_name, is_terminal
+    );
+
+    // Tier 1: SendInput for text up to ~2000 chars (skip for terminals)
+    if !is_terminal && text.chars().count() <= 2000 {
         match platform::sendinput_unicode(text) {
             Ok(()) => {
                 log::info!("Text injected via SendInput UNICODE: {} chars", text.len());
@@ -890,6 +948,11 @@ fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
                 );
             }
         }
+    } else if is_terminal {
+        eprintln!(
+            "[inject_auto] Skipping SendInput for terminal app '{}', using clipboard",
+            exe_name
+        );
     } else {
         eprintln!(
             "[inject_auto] Text too long for SendInput ({} chars), using clipboard",
@@ -897,7 +960,7 @@ fn inject_auto_windows(text: &str) -> Result<(), InjectionError> {
         );
     }
 
-    // Tier 2: Clipboard save/paste/restore
+    // Tier 2: Clipboard save/paste/restore (primary for terminals, fallback for others)
     platform::clipboard_save_paste_restore(text)?;
     log::info!(
         "Text injected via clipboard save/paste/restore: {} chars",
