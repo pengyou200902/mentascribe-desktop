@@ -495,7 +495,7 @@ fn update_settings(
     new_settings: settings::UserSettings,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let (old_hotkey, old_draggable, old_opacity, old_model_size, old_engine) = {
+    let (old_hotkey, old_draggable, _old_opacity, old_model_size, old_engine) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         (
             settings.hotkey.key.clone(),
@@ -518,7 +518,7 @@ fn update_settings(
         }
     }
 
-    let new_opacity = new_settings.widget.opacity;
+    let _new_opacity = new_settings.widget.opacity;
 
     let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
     *settings = new_settings.clone();
@@ -536,8 +536,8 @@ fn update_settings(
 
     // Apply opacity change to NSPanel
     #[cfg(target_os = "macos")]
-    if (old_opacity - new_opacity).abs() > f64::EPSILON {
-        apply_panel_opacity(&app, new_opacity);
+    if (_old_opacity - _new_opacity).abs() > f64::EPSILON {
+        apply_panel_opacity(&app, _new_opacity);
     }
 
     // Notify all windows (especially dictation) that settings changed
@@ -1388,7 +1388,7 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(not(target_os = "macos"))]
     {
         // Non-macOS fallback using tao APIs
-        let cursor_pos = window.cursor_position()
+        let _cursor_pos = window.cursor_position()
             .map_err(|e| format!("Failed to get cursor position: {}", e))?;
         let monitor = window.current_monitor().ok().flatten()
             .or_else(|| window.primary_monitor().ok().flatten())
