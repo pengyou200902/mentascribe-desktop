@@ -1,324 +1,319 @@
-# Codebase Structure
+# Project Structure
 
-**Analysis Date:** 2026-04-05
+**Analysis Date:** 2026-04-06
 
 ## Directory Layout
 
 ```
 mentascribe-desktop/
-├── src/                              # React/TypeScript frontend (Vite + React 18)
-│   ├── main.tsx                      # React DOM entry point
-│   ├── App.tsx                       # Root component (window routing, event setup, recording state)
-│   ├── components/                   # React UI components
-│   │   ├── DictationBar.tsx          # Floating pill overlay (waveform, processing, errors)
-│   │   ├── Settings.tsx              # Legacy settings editor (props-based)
-│   │   ├── History.tsx               # Legacy history viewer (localStorage-based)
-│   │   ├── MenuBar.tsx               # Legacy menu bar component
-│   │   ├── TranscriptionOverlay.tsx  # Legacy overlay component
-│   │   └── dashboard/               # Multi-page dashboard window
-│   │       ├── Dashboard.tsx         # Page router + ThemeProvider wrapper
-│   │       ├── Sidebar.tsx           # Navigation sidebar with icons
-│   │       ├── HomePage.tsx          # Stats overview (streak, words, time)
-│   │       ├── HistoryPage.tsx       # Transcription history list with CRUD
-│   │       ├── DictionaryPage.tsx    # Text replacement rule management
-│   │       └── SettingsPage.tsx      # Full settings UI (transcription, hotkey, output, appearance)
-│   ├── lib/                          # Shared utilities and state stores
-│   │   ├── store.ts                  # Main Zustand store (settings via useStore hook)
-│   │   ├── historyStore.ts           # History Zustand store (paginated, useHistoryStore)
-│   │   ├── dictionaryStore.ts        # Dictionary Zustand store (useDictionaryStore)
-│   │   ├── statsStore.ts             # Stats Zustand store (useStatsStore)
-│   │   ├── tauri.ts                  # Typed wrappers around invoke() calls
-│   │   └── theme.tsx                 # ThemeProvider React context (light/dark/system)
-│   ├── config/                       # Frontend constants
-│   │   └── widget.ts                 # All dictation bar animation/timing constants
-│   ├── types/                        # TypeScript type definitions
-│   │   └── index.ts                  # Shared interfaces (TranscriptionEntry, DictionaryEntry, etc.)
-│   ├── styles/                       # CSS
-│   │   └── globals.css               # Tailwind directives + custom dictation pill CSS + fonts
-│   └── icons/                        # Application icons (PNG, ICO, ICNS, SVG)
-│
-├── src-tauri/                        # Rust backend (Tauri v2)
-│   ├── Cargo.toml                    # Rust dependencies and feature flags
-│   ├── Cargo.lock                    # Locked dependency versions
-│   ├── build.rs                      # Build script (tauri_build + cc for Voxtral C compilation)
-│   ├── tauri.conf.json               # Tauri config: windows, app metadata, plugins, bundle targets
-│   ├── Info.plist                     # macOS bundle info
-│   ├── capabilities/                 # Tauri v2 permission system
-│   │   └── default.json             # Allowed Tauri APIs per window
-│   ├── gen/                          # Auto-generated Tauri schemas
-│   │   └── schemas/                 # ACL manifests, capability schemas
-│   ├── icons/                        # App icons for bundling
-│   ├── src/                          # Rust source code
-│   │   ├── main.rs                   # Binary entry (calls lib::run())
-│   │   ├── lib.rs                    # Core app (~1670 lines): setup, AppState, all commands
-│   │   ├── audio/                    # Audio capture subsystem
-│   │   │   ├── mod.rs               # Module exports (AudioData)
-│   │   │   ├── capture.rs           # CPAL device management, streaming, resampling, level metering
-│   │   │   └── vad.rs               # Energy-based voice activity detection
-│   │   ├── transcription/            # Speech-to-text engines
-│   │   │   ├── mod.rs               # Shared types (ModelInfo, CoremlStatus, VoxtralStatus)
-│   │   │   ├── whisper.rs           # Whisper.cpp: model cache, streaming VAD, batch inference
-│   │   │   ├── cloud.rs             # Cloud STT stub (OpenAI, etc.)
-│   │   │   ├── voxtral.rs           # Voxtral engine wrapper (feature-gated)
-│   │   │   └── voxtral_ffi.rs       # C FFI bindings for Voxtral (feature-gated)
-│   │   ├── settings/                 # Configuration persistence
-│   │   │   └── mod.rs               # UserSettings structs, load/save to JSON
-│   │   ├── hotkey/                   # Global keyboard shortcuts
-│   │   │   └── mod.rs               # F1-F12 registration via tauri-plugin-global-shortcut
-│   │   ├── injection/                # Text insertion into active app
-│   │   │   └── mod.rs               # Platform-specific: macOS CGEvent, Windows clipboard, Linux X11
-│   │   ├── history/                  # Transcription log
-│   │   │   └── mod.rs               # CRUD operations, JSON persistence
-│   │   ├── dictionary/               # Text replacement engine
-│   │   │   └── mod.rs               # RwLock cache, phrase matching, JSON persistence
-│   │   ├── stats/                    # Usage metrics
-│   │   │   └── mod.rs               # Daily counters, streak tracking, JSON persistence
-│   │   ├── text/                     # Post-transcription processing
-│   │   │   └── mod.rs               # Auto-capitalization (with unit tests)
-│   │   └── api/                      # External API client
-│   │       ├── mod.rs               # AuthToken, UserInfo types
-│   │       └── client.rs            # HTTP client for MentaFlux API, keyring token storage
-│   └── voxtral/                      # Voxtral C source (compiled via build.rs)
-│       ├── voxtral.c                # Core inference logic
-│       ├── voxtral.h                # Public API header
-│       ├── voxtral_audio.c/h        # Audio preprocessing
-│       ├── voxtral_decoder.c        # Decoder implementation
-│       ├── voxtral_encoder.c        # Encoder implementation
-│       ├── voxtral_kernels.c/h      # CPU compute kernels
-│       ├── voxtral_tokenizer.c/h    # Tokenizer implementation
-│       ├── voxtral_safetensors.c/h  # Model weight loading
-│       ├── voxtral_metal.h/m        # Metal GPU bridge (Objective-C)
-│       ├── voxtral_shaders.metal    # Metal GPU shader source
-│       ├── voxtral_mic.h            # Microphone abstraction
-│       ├── voxtral_mic_macos.c      # macOS mic implementation
-│       ├── download_model.sh        # Model download script
-│       └── LICENSE                   # Voxtral license
-│
-├── index.html                        # HTML shell (transparent background, theme flash prevention)
-├── package.json                      # Frontend dependencies and scripts
-├── package-lock.json                 # Locked npm dependencies
-├── tsconfig.json                     # TypeScript config (strict mode)
-├── tsconfig.node.json                # Vite-specific TypeScript config
-├── vite.config.ts                    # Vite bundler config (React plugin, Tauri env prefix)
-├── tailwind.config.js                # Tailwind CSS config (custom amber/stone palette, dark mode)
-├── postcss.config.js                 # PostCSS config (Tailwind + autoprefixer)
-├── .gitignore                        # Git ignore rules
-├── LICENSE                           # MIT license
-├── README.md                         # Project documentation
-├── images/                           # Screenshots and demo assets for README
-└── .planning/                        # GSD planning system
-    └── codebase/                    # Codebase analysis documents
+├── src/                        # Frontend (React/TypeScript)
+│   ├── components/             # React components
+│   │   ├── dashboard/          # Dashboard window components
+│   │   │   ├── Dashboard.tsx   # Dashboard shell with sidebar + page routing
+│   │   │   ├── DictionaryPage.tsx  # Custom word/phrase management
+│   │   │   ├── HistoryPage.tsx     # Transcription history viewer
+│   │   │   ├── HomePage.tsx        # Stats overview / landing page
+│   │   │   ├── SettingsPage.tsx    # All user settings
+│   │   │   └── Sidebar.tsx         # Dashboard navigation sidebar
+│   │   ├── DictationBar.tsx    # Overlay pill widget (waveform, status, drag)
+│   │   ├── History.tsx         # Legacy history component (dictation window)
+│   │   ├── MenuBar.tsx         # Legacy menu bar component
+│   │   ├── Settings.tsx        # Legacy settings component (dictation window)
+│   │   └── TranscriptionOverlay.tsx  # Legacy transcription display
+│   ├── config/
+│   │   └── widget.ts           # Centralized UI constants (timing, sizing, defaults)
+│   ├── icons/                  # App icons (png, icns, ico, svg)
+│   ├── lib/
+│   │   ├── dictionaryStore.ts  # Zustand store for dictionary CRUD
+│   │   ├── historyStore.ts     # Zustand store for history (pagination, CRUD)
+│   │   ├── statsStore.ts       # Zustand store for usage statistics
+│   │   ├── store.ts            # Zustand store for settings (load/update)
+│   │   ├── tauri.ts            # Typed wrappers around Tauri invoke() calls
+│   │   └── theme.tsx           # Theme context provider (light/dark/system)
+│   ├── styles/
+│   │   └── globals.css         # Global CSS (Tailwind directives, custom styles)
+│   ├── types/
+│   │   └── index.ts            # Shared TypeScript interfaces (matches Rust structs)
+│   ├── App.tsx                 # Root component (window routing, recording logic)
+│   └── main.tsx                # React entry point (renders App into #root)
+├── src-tauri/                  # Backend (Rust/Tauri)
+│   ├── .cargo/
+│   │   └── config.toml         # Cargo build config (CUDA host compiler workaround)
+│   ├── capabilities/
+│   │   └── default.json        # Tauri v2 capability permissions
+│   ├── gen/                    # Auto-generated Tauri schemas (do not edit)
+│   │   └── schemas/            # JSON schemas for capabilities validation
+│   ├── icons/                  # Platform app icons for bundling
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── mod.rs          # API types (AuthToken, UserInfo)
+│   │   │   └── client.rs       # HTTP client (reqwest), auth, keychain storage
+│   │   ├── audio/
+│   │   │   ├── mod.rs          # Re-exports AudioData
+│   │   │   ├── capture.rs      # CPAL mic capture, real-time resampling, levels
+│   │   │   └── vad.rs          # Energy-based voice activity detector
+│   │   ├── dictionary/
+│   │   │   └── mod.rs          # Dictionary entries, RwLock cache, regex replacements
+│   │   ├── history/
+│   │   │   └── mod.rs          # Transcription history (JSON persistence, pagination)
+│   │   ├── hotkey/
+│   │   │   └── mod.rs          # Global shortcut registration (F1-F12)
+│   │   ├── injection/
+│   │   │   └── mod.rs          # Platform text injection (AX/CGEvent/clipboard/SendInput/X11)
+│   │   ├── settings/
+│   │   │   └── mod.rs          # UserSettings struct, JSON load/save
+│   │   ├── stats/
+│   │   │   └── mod.rs          # Usage stats (totals, daily, streaks)
+│   │   ├── text/
+│   │   │   └── mod.rs          # Post-transcription text processing (capitalization)
+│   │   ├── transcription/
+│   │   │   ├── mod.rs          # Shared types (ModelInfo, CoremlStatus, etc.)
+│   │   │   ├── whisper.rs      # Whisper engine (model cache, streaming, download)
+│   │   │   ├── cloud.rs        # Cloud STT stubs (OpenAI, AWS, AssemblyAI)
+│   │   │   ├── voxtral.rs      # Voxtral engine (feature-gated)
+│   │   │   └── voxtral_ffi.rs  # C FFI bindings for voxtral (feature-gated)
+│   │   ├── lib.rs              # Tauri app setup, all #[tauri::command] definitions, AppState
+│   │   └── main.rs             # Binary entry point (calls lib::run())
+│   ├── voxtral/                # Custom C voxtral engine source
+│   │   ├── voxtral.c/h         # Core engine
+│   │   ├── voxtral_audio.c/h   # Audio processing
+│   │   ├── voxtral_decoder.c   # Decoder
+│   │   ├── voxtral_encoder.c   # Encoder
+│   │   ├── voxtral_kernels.c/h # Compute kernels
+│   │   ├── voxtral_metal.h/m   # Metal GPU bridge (macOS)
+│   │   ├── voxtral_shaders.metal  # Metal compute shaders
+│   │   ├── voxtral_safetensors.c/h  # Model format loader
+│   │   ├── voxtral_tokenizer.c/h   # Tokenizer
+│   │   ├── voxtral_mic*.c/h    # Mic capture (macOS-specific)
+│   │   ├── download_model.sh   # Model download script
+│   │   └── LICENSE
+│   ├── build.rs                # Build script (tauri_build + voxtral C compilation)
+│   ├── Cargo.toml              # Rust dependencies and feature flags
+│   └── tauri.conf.json         # Tauri window config, CSP, bundle settings
+├── images/                     # Static images (README, marketing)
+├── index.html                  # HTML entry point (shared by both windows)
+├── package.json                # Frontend dependencies and scripts
+├── vite.config.ts              # Vite dev server and build config
+├── tailwind.config.js          # Tailwind CSS configuration
+├── postcss.config.js           # PostCSS configuration
+├── tsconfig.json               # TypeScript config (frontend)
+├── tsconfig.node.json          # TypeScript config (Vite/Node tooling)
+└── .planning/                  # GSD planning documents
+    └── codebase/               # Codebase analysis documents
 ```
 
 ## Directory Purposes
 
-**`src/`** -- React frontend application
-- Bundled by Vite, served on `localhost:1420` during development
-- Built to `dist/` for production via `npm run build`
-- Single React app serves both window types via URL hash detection
-- Entry: `main.tsx` mounts `App` at `#root`
+**`src/`:**
+- Purpose: Frontend React/TypeScript application
+- Contains: Components, state management stores, type definitions, CSS, icons
+- Key files: `App.tsx` (root), `main.tsx` (entry), `lib/store.ts` (settings store)
 
-**`src/components/`** -- React UI components
-- `DictationBar.tsx`: Core overlay widget (~260 lines). Renders a floating pill with states: collapsed, expanded-idle, recording (waveform), processing (dots+spinner), error, initializing. Uses `ResizeObserver` to dynamically resize Tauri window. Cursor hover detection via Rust invoke polling.
-- `dashboard/`: Multi-page dashboard with sidebar navigation. `Dashboard.tsx` wraps content in `ThemeProvider`, routes pages via state. Pages: Home (stats), History (list), Dictionary (CRUD), Settings (all config).
-- Legacy components (`Settings.tsx`, `History.tsx`, `MenuBar.tsx`, `TranscriptionOverlay.tsx`): Older implementations from pre-dashboard architecture. Not rendered in current UI but still present in the codebase.
+**`src/components/`:**
+- Purpose: All React UI components
+- Contains: Dictation overlay widget and dashboard page components
+- Key file: `DictationBar.tsx` is the primary user-facing overlay
 
-**`src/lib/`** -- Shared state and utilities
-- Four Zustand stores, each following the pattern: define interface, `create<Interface>((set, get) => ({}))`, export hook
-- `tauri.ts`: Typed wrapper functions around `invoke()` for recording, text injection, login, model management
-- `theme.tsx`: React Context + Provider for theme management, persists to `localStorage('mentascribe-theme')`
+**`src/components/dashboard/`:**
+- Purpose: Dashboard window UI (opened from tray icon)
+- Contains: Full settings UI, history viewer, dictionary editor, stats home page
+- Key file: `Dashboard.tsx` is the shell with sidebar routing
 
-**`src/config/`** -- Frontend constants
-- `widget.ts`: ~40 exported constants for dictation bar behavior (waveform animation, polling intervals, error timeouts, defaults). Centralized to avoid magic numbers in components.
+**`src/lib/`:**
+- Purpose: Shared utilities, state stores, and Tauri IPC wrappers
+- Contains: Zustand stores for each data domain, theme provider, typed invoke wrappers
+- Key file: `store.ts` (settings store used by both windows)
 
-**`src/types/`** -- Shared TypeScript interfaces
-- `index.ts`: Types matching Rust backend structs: `DailyStats`, `LocalStats`, `TranscriptionEntry`, `DictionaryEntry`, `DashboardPage` type alias
+**`src/config/`:**
+- Purpose: Centralized UI configuration constants
+- Contains: `widget.ts` with all timing, sizing, and behavior defaults
+- Pattern: Import constants from here rather than using magic numbers in components
 
-**`src-tauri/src/`** -- Rust backend
-- `lib.rs` is the monolithic core: all Tauri command handlers, `AppState`, `run()` setup, macOS NSPanel management, native drag, window positioning. This is the largest file at ~1670 lines.
-- Each subsystem is a separate module directory with `mod.rs` (and optionally submodules).
-- Subsystems are loosely coupled: `lib.rs` orchestrates calls between them.
+**`src/types/`:**
+- Purpose: Shared TypeScript interfaces that mirror Rust backend structs
+- Contains: `index.ts` with `LocalStats`, `TranscriptionEntry`, `DictionaryEntry`, `DashboardPage`
+- Pattern: Keep in sync with Rust serde types in `src-tauri/src/`
 
-**`src-tauri/voxtral/`** -- Voxtral C engine source
-- Complete custom speech-to-text engine written in C
-- Compiled by `build.rs` using the `cc` crate
-- Feature-gated: only compiled when `--features voxtral` is passed
-- Metal GPU shaders precompiled to `.metallib` at build time on macOS
+**`src-tauri/src/`:**
+- Purpose: Rust backend -- all native system operations
+- Contains: Module directories for each subsystem, `lib.rs` as the central hub
+- Key file: `lib.rs` (1744 lines) contains Tauri setup, all command definitions, platform window management
+
+**`src-tauri/src/api/`:**
+- Purpose: MentaFlux cloud API client
+- Contains: HTTP calls, auth token management, OS keychain storage
+
+**`src-tauri/src/audio/`:**
+- Purpose: Microphone capture and audio processing
+- Contains: CPAL stream management, real-time resampling, energy-based VAD
+
+**`src-tauri/src/transcription/`:**
+- Purpose: Speech-to-text engines
+- Contains: Whisper (primary), cloud stubs, Voxtral (feature-gated)
+
+**`src-tauri/src/injection/`:**
+- Purpose: Cross-platform text injection into focused applications
+- Contains: macOS (AX/CGEvent/clipboard), Windows (SendInput/clipboard), Linux (X11)
+
+**`src-tauri/voxtral/`:**
+- Purpose: Custom C-based speech recognition engine source code
+- Contains: Encoder, decoder, tokenizer, Metal GPU shaders, model loader
+- Generated: No (hand-written C code)
+- Committed: Yes
+- Build: Compiled by `build.rs` when `voxtral` feature is enabled
+
+**`src-tauri/gen/`:**
+- Purpose: Auto-generated Tauri v2 schema files
+- Generated: Yes (by Tauri CLI)
+- Committed: Yes
+- Do not edit: Regenerated on `tauri build`
+
+**`src-tauri/capabilities/`:**
+- Purpose: Tauri v2 permission declarations
+- Contains: `default.json` listing allowed window operations, plugin permissions
+- Key detail: Both `dictation` and `dashboard` windows share the same capability set
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/main.tsx`: Frontend bootstrap (React DOM mount)
-- `src/App.tsx`: Root component, window type routing, all event listener setup
-- `src-tauri/src/main.rs`: Rust binary entry (delegates to `lib::run()`)
-- `src-tauri/src/lib.rs`: Application initialization (`pub fn run()`), all command handlers
+- `src/main.tsx`: Frontend React mount point
+- `src-tauri/src/main.rs`: Rust binary entry (calls `lib::run()`)
+- `src-tauri/src/lib.rs`: Tauri app builder, plugin registration, command handler setup
+- `index.html`: Shared HTML entry (both windows load this, routing via hash)
 
 **Configuration:**
-- `package.json`: npm scripts (`dev`, `build`, `tauri`, `lint`, `format`, `typecheck`)
-- `src-tauri/Cargo.toml`: Rust deps, platform-specific deps, feature flags (`voxtral`, `custom-protocol`)
-- `src-tauri/tauri.conf.json`: Window definitions (dictation: 52x10 transparent overlay; dashboard: 800x600 standard), bundle targets (dmg, msi, nsis, appimage, deb, rpm), CSP, plugins
-- `src-tauri/capabilities/default.json`: Tauri v2 permission grants for both windows
-- `tsconfig.json`: TypeScript strict mode, ES2021 target
-- `vite.config.ts`: Vite dev server port 1420, Tauri env prefix, build targets
-- `tailwind.config.js`: Custom color palette (amber brand, stone neutrals), dark mode via `class`
+- `src-tauri/tauri.conf.json`: Window definitions, CSP, bundle targets, plugin config
+- `src-tauri/Cargo.toml`: Rust dependencies, platform-specific deps, feature flags
+- `src-tauri/capabilities/default.json`: Tauri v2 permission grants
+- `src-tauri/.cargo/config.toml`: CUDA build workaround (Windows)
+- `package.json`: Frontend deps, npm scripts
+- `vite.config.ts`: Vite dev server (port 1420), build targets
+- `tailwind.config.js`: Tailwind CSS setup
+- `tsconfig.json` / `tsconfig.node.json`: TypeScript configuration
 
-**Core Recording Pipeline:**
-- `src-tauri/src/lib.rs` (`start_recording`, `stop_recording`): Orchestration
-- `src-tauri/src/audio/capture.rs`: Audio device, sample buffering, real-time 16kHz resampling
-- `src-tauri/src/transcription/whisper.rs`: Model loading, streaming inference, final batch inference
-- `src-tauri/src/text/mod.rs`: Auto-capitalization
-- `src-tauri/src/dictionary/mod.rs`: Text replacement application
-- `src-tauri/src/injection/mod.rs`: Text insertion into active app
+**Core Logic:**
+- `src-tauri/src/lib.rs`: All Tauri commands, AppState, platform overlay setup, tray menu, window management (~1744 lines)
+- `src-tauri/src/audio/capture.rs`: Audio capture with real-time resampling (~654 lines)
+- `src-tauri/src/transcription/whisper.rs`: Whisper engine, model management, streaming (~1100+ lines)
+- `src-tauri/src/injection/mod.rs`: Platform text injection (~300+ lines)
+- `src/App.tsx`: Frontend recording state machine, event listeners (~326 lines)
+- `src/components/DictationBar.tsx`: Overlay UI with waveform visualization
 
-**Persistent Data (all at `~/.config/mentascribe/`):**
-- `settings.json`: User preferences (managed by `src-tauri/src/settings/mod.rs`)
-- `history.json`: Transcription log (managed by `src-tauri/src/history/mod.rs`)
-- `dictionary.json`: Replacement rules (managed by `src-tauri/src/dictionary/mod.rs`)
-- `stats.json`: Usage metrics (managed by `src-tauri/src/stats/mod.rs`)
+**Testing:**
+- `src-tauri/src/text/mod.rs`: Contains `#[cfg(test)] mod tests` with unit tests for text processing
 
-**ML Models (at `~/.mentascribe/models/`):**
-- Whisper GGML models: `ggml-tiny.bin`, `ggml-base.bin`, `ggml-small.bin`, `ggml-medium.bin`, `ggml-large-v3.bin`
-- CoreML encoders: `ggml-{size}-encoder.mlmodelc/` directories
-- VAD model: `ggml-silero-vad.bin`
-- Voxtral model: downloaded via `download_model.sh` or `download_voxtral_model` command
-
-## Module Organization
-
-**Frontend modules communicate through:**
-1. Zustand stores (global state shared across components)
-2. Props (parent-to-child data flow)
-3. Tauri events (backend-to-frontend via `listen()`)
-4. Tauri commands (frontend-to-backend via `invoke()`)
-
-**Backend modules communicate through:**
-1. Direct function calls from `lib.rs` command handlers into subsystem modules
-2. `AppState` managed state (passed via `tauri::State` parameter in commands)
-3. Static globals within modules (lazy_static/once_cell for caches)
-4. Tauri events emitted to frontend (progress, completion, errors)
-
-**Module dependency graph (Rust):**
-```
-lib.rs (orchestrator)
-├── audio::capture  (start/stop capture, get level)
-├── audio::vad      (used by capture internally)
-├── transcription::whisper (transcribe, preload, download, streaming)
-├── transcription::voxtral (feature-gated alternative engine)
-├── transcription::cloud   (stub for cloud fallback)
-├── settings       (load/save UserSettings)
-├── hotkey         (setup/unregister global shortcuts)
-├── injection      (inject text into active app)
-├── history        (add/get/delete transcription entries)
-├── dictionary     (get/add/update/remove rules, apply replacements)
-├── stats          (record transcription, get stats)
-├── text           (process_text post-transcription)
-└── api::client    (login, token management)
-```
+**User Data (runtime, not in repo):**
+- `~/.mentascribe/models/`: Downloaded Whisper/Voxtral model files
+- `{config_dir}/mentascribe/settings.json`: User preferences
+- `{config_dir}/mentascribe/history.json`: Transcription history
+- `{config_dir}/mentascribe/dictionary.json`: Custom dictionary entries
+- `{config_dir}/mentascribe/stats.json`: Usage statistics
 
 ## Naming Conventions
 
 **Files:**
-- React components: `PascalCase.tsx` -- `DictationBar.tsx`, `Dashboard.tsx`, `SettingsPage.tsx`
-- TypeScript utilities/stores: `camelCase.ts` -- `store.ts`, `historyStore.ts`, `tauri.ts`
-- TypeScript config: `camelCase.ts` -- `widget.ts`
-- Rust modules: `snake_case.rs` -- `capture.rs`, `mod.rs`, `client.rs`
-- Rust feature modules: `snake_case/mod.rs` directory pattern
-- Config files: standard names -- `package.json`, `Cargo.toml`, `tauri.conf.json`
+- React components: PascalCase (e.g., `DictationBar.tsx`, `SettingsPage.tsx`)
+- Stores/utilities: camelCase (e.g., `historyStore.ts`, `store.ts`)
+- Rust modules: snake_case directories with `mod.rs` (e.g., `audio/mod.rs`, `hotkey/mod.rs`)
+- Rust multi-file modules: snake_case (e.g., `capture.rs`, `client.rs`, `whisper.rs`)
+- C source: snake_case with `voxtral_` prefix (e.g., `voxtral_encoder.c`)
 
 **Directories:**
-- React feature groups: `lowercase/` -- `components/`, `dashboard/`, `lib/`, `config/`, `types/`
-- Rust subsystems: `snake_case/` -- `audio/`, `transcription/`, `settings/`, `hotkey/`, `injection/`
-
-**Import conventions:**
-- Frontend: `@tauri-apps/api/core` for `invoke`, `@tauri-apps/api/event` for `listen`
-- Zustand stores imported as hooks: `import { useStore } from '../lib/store'`
-- Types imported with `type` keyword: `import type { TranscriptionEntry } from '../types'`
-- Rust: module paths like `crate::audio::AudioData`, `crate::settings::UserSettings`
+- Frontend: camelCase for feature dirs (`dashboard/`), lowercase for category dirs (`lib/`, `types/`, `config/`)
+- Backend: snake_case matching Rust module names (`audio/`, `transcription/`, `injection/`)
 
 ## Where to Add New Code
 
 **New Tauri Command:**
-1. Define `#[tauri::command]` function in `src-tauri/src/lib.rs` (or in a subsystem module, called from lib.rs)
-2. Register in `tauri::generate_handler![]` array in the `run()` function
-3. Add TypeScript wrapper in `src/lib/tauri.ts` (optional but recommended for typing)
-4. Call via `invoke('command_name', { args })` from frontend
+1. Implement logic in the appropriate module under `src-tauri/src/` (or create new module)
+2. Add `#[tauri::command]` function in `src-tauri/src/lib.rs`
+3. Register in `tauri::generate_handler![]` array at the bottom of `lib.rs`
+4. Add TypeScript wrapper in `src/lib/tauri.ts`
+5. Call via `invoke()` from React components
+
+**New Backend Module:**
+1. Create `src-tauri/src/{module_name}/mod.rs`
+2. Add `mod {module_name};` at top of `src-tauri/src/lib.rs`
+3. Expose commands through `lib.rs`
 
 **New Dashboard Page:**
-1. Create component: `src/components/dashboard/MyPage.tsx`
-2. Add page type to `DashboardPage` union in `src/types/index.ts`
-3. Add navigation item in `src/components/dashboard/Sidebar.tsx` (add to `navItems` array)
-4. Add case to `renderPage()` switch in `src/components/dashboard/Dashboard.tsx`
-
-**New Rust Subsystem Module:**
-1. Create directory: `src-tauri/src/my_feature/`
-2. Create `src-tauri/src/my_feature/mod.rs` with public API functions
-3. Add `mod my_feature;` declaration at top of `src-tauri/src/lib.rs`
-4. Call functions from command handlers in `lib.rs`
-5. Use `thiserror::Error` for module-specific error types
-6. Use `serde::{Serialize, Deserialize}` for types crossing the IPC boundary
-
-**New Zustand Store:**
-1. Create `src/lib/myFeatureStore.ts`
-2. Follow existing pattern: define interface, `create<Interface>((set, get) => ({}))`
-3. Export custom hook: `export const useMyFeatureStore = create<MyFeatureStore>(...)`
-4. All backend calls via `invoke()` inside store actions
+1. Create component in `src/components/dashboard/{PageName}Page.tsx`
+2. Add to page enum in `src/types/index.ts` (`DashboardPage` type)
+3. Add route case in `src/components/dashboard/Dashboard.tsx` `renderPage()`
+4. Add navigation item in `src/components/dashboard/Sidebar.tsx`
 
 **New Frontend Component:**
-1. Create in `src/components/` (top-level) or `src/components/dashboard/` (dashboard page)
-2. Use functional component with TypeScript props interface
-3. Import Zustand stores for shared state, `invoke` for backend calls, `listen` for events
-4. Follow Tailwind CSS patterns with `dark:` variants for theme support
+- Dictation overlay component: `src/components/{ComponentName}.tsx`
+- Dashboard component: `src/components/dashboard/{ComponentName}.tsx`
 
-**New Persistent Data Module (Rust):**
-1. Create module in `src-tauri/src/my_data/mod.rs`
-2. Define data structs with `#[derive(Serialize, Deserialize, Default)]`
-3. Use `dirs::config_dir().join("mentascribe").join("my_data.json")` for storage path
-4. Implement `load_from_disk()` and `save_to_disk()` functions
-5. Consider `Lazy<RwLock<>>` cache if data is read frequently (see `dictionary/mod.rs` pattern)
+**New Zustand Store:**
+- Create `src/lib/{domain}Store.ts` following the pattern in `historyStore.ts`
+- Import from components that need it
 
-**Tests:**
-- Rust: Inline `#[cfg(test)] mod tests { ... }` at bottom of module file (see `src-tauri/src/text/mod.rs`)
-- TypeScript: No test framework configured; would need Jest/Vitest setup
+**New Frontend Type:**
+- Add to `src/types/index.ts` (keep in sync with Rust serde structs)
+
+**New Frontend Constants:**
+- Add to `src/config/widget.ts` for UI/timing constants
+
+**Platform-Specific Rust Code:**
+- Use `#[cfg(target_os = "macos")]` / `#[cfg(target_os = "windows")]` / `#[cfg(target_os = "linux")]` blocks
+- For injection: add platform module inside `src-tauri/src/injection/mod.rs`
+- For window management: add platform-specific functions in `src-tauri/src/lib.rs`
+
+**Feature-Gated Code:**
+- Use `#[cfg(feature = "voxtral")]` for Voxtral-specific code
+- Define feature in `src-tauri/Cargo.toml` under `[features]`
 
 ## Special Directories
 
 **`src-tauri/target/`:**
-- Purpose: Cargo build outputs (debug and release binaries, dependencies)
-- Generated: Yes (by `cargo build`)
-- Committed: No (in `.gitignore`)
-- Can be very large (10+ GB with debug symbols)
-
-**`dist/`:**
-- Purpose: Vite build output (bundled frontend JS, CSS, assets)
-- Generated: Yes (by `npm run build` or `pnpm build`)
-- Committed: No (in `.gitignore`)
-- Consumed by Tauri as `frontendDist: "../dist"` in `tauri.conf.json`
+- Purpose: Cargo build artifacts
+- Generated: Yes
+- Committed: No (in .gitignore)
 
 **`src-tauri/gen/`:**
-- Purpose: Tauri-generated schema files for IDE support and ACL validation
-- Generated: Yes (by Tauri CLI during build)
-- Committed: Yes (checked into git for IDE schema resolution)
+- Purpose: Tauri auto-generated schema files
+- Generated: Yes (by `tauri build` / `tauri dev`)
+- Committed: Yes
 
 **`node_modules/`:**
-- Purpose: npm/pnpm package dependencies
-- Generated: Yes (by `npm install` or `pnpm install`)
-- Committed: No (in `.gitignore`)
+- Purpose: NPM dependency tree
+- Generated: Yes
+- Committed: No (in .gitignore)
 
-**`images/`:**
-- Purpose: Screenshots and demo assets referenced in README.md
-- Generated: No (manually added)
+**`dist/`:**
+- Purpose: Vite build output (frontend assets)
+- Generated: Yes (by `vite build`)
+- Committed: No
+- Referenced: `tauri.conf.json` sets `frontendDist: "../dist"`
+
+**`.planning/`:**
+- Purpose: GSD codebase analysis and planning documents
+- Generated: By analysis tools
 - Committed: Yes
 
-**`.planning/codebase/`:**
-- Purpose: GSD codebase analysis documents (this file and others)
-- Generated: Yes (by GSD analysis agents)
+**`.claude/`:**
+- Purpose: Claude agent configuration, skills, workflows
+- Contains: Agent definitions, GSD tooling, hooks
 - Committed: Yes
 
-**`src/icons/` and `src-tauri/icons/`:**
-- Purpose: Application icons in multiple formats/sizes for bundling
-- Generated: No (designed assets)
-- Committed: Yes
-- Note: Duplicated between `src/icons/` (frontend) and `src-tauri/icons/` (bundle)
+## Build Outputs
+
+**Development:**
+- Frontend: Vite dev server at `http://localhost:1420`
+- Backend: Cargo incremental build in `src-tauri/target/debug/`
+- Command: `npm run tauri dev` (or `cargo tauri dev`)
+
+**Production:**
+- Frontend: `dist/` (static assets from `vite build`)
+- Backend: `src-tauri/target/release/` (optimized binary with LTO)
+- Bundle targets: DMG (macOS), MSI/NSIS (Windows), AppImage/DEB/RPM (Linux)
+- Command: `npm run tauri build`
+
+**Build Profile (release):**
+- `panic = "abort"`, `codegen-units = 1`, `lto = true`, `opt-level = 3`, `strip = true`
 
 ---
 
-*Structure analysis: 2026-04-05*
+*Structure analysis: 2026-04-06*
