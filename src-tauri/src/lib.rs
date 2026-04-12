@@ -1360,14 +1360,6 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         .map(|s| s.widget.draggable)
         .unwrap_or(false);
     if is_draggable {
-        // Log once per second (this is called every 150ms, so ~7 calls/sec)
-        // Use a simple static counter to throttle
-        use std::sync::atomic::AtomicU64;
-        static SKIP_COUNT: AtomicU64 = AtomicU64::new(0);
-        let count = SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
-        if count % 40 == 0 {
-            eprintln!("[reposition] SKIPPED (draggable=true), skip count: {}", count);
-        }
         return Ok(false);
     }
 
