@@ -20,6 +20,11 @@
 #include <math.h>
 
 #ifdef _WIN32
+/* WIN32_LEAN_AND_MEAN excludes winsock.h (which defines its own struct timeval)
+ * from the windows.h include, letting our shim struct be the sole definition. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 /* gettimeofday shim for Windows */
 struct timeval { long tv_sec; long tv_usec; };
