@@ -7,10 +7,79 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+/* ---- Windows POSIX shims ---------------------------------------------------
+ * MSVC lacks unistd.h / sys/mman.h. Provide the minimal surface used below:
+ *   - open/close/O_RDONLY  -> _open/_close/_O_RDONLY|_O_BINARY (via <io.h>)
+ *   - mmap/munmap          -> CreateFileMapping + MapViewOfFile
+ *   - file size            -> retrieved via GetFileSizeEx in safetensors_open
+ *                             (bypasses struct stat's 32-bit st_size on MSVC)
+ * macOS/Linux take the #else branch and use real POSIX headers.
+ * ------------------------------------------------------------------------- */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+
+#define open   _open
+#define close  _close
+#ifdef O_RDONLY
+#undef O_RDONLY
+#endif
+#define O_RDONLY (_O_RDONLY | _O_BINARY)
+
+#define PROT_READ    1
+#define MAP_PRIVATE  2
+#define MAP_FAILED   ((void *)-1)
+
+/* Track (mapped_addr -> file mapping HANDLE) so munmap can close the handle.
+ * munmap's POSIX signature doesn't receive the handle, so we keep a small
+ * linked list — one node per live mapping (typically ≤3: the safetensors + any
+ * concurrent opens). */
+typedef struct vox_mmap_entry {
+    void *addr;
+    HANDLE file_map;
+    struct vox_mmap_entry *next;
+} vox_mmap_entry_t;
+static vox_mmap_entry_t *vox_mmap_list = NULL;
+
+static void *mmap(void *hint, size_t length, int prot, int flags, int fd, long offset) {
+    (void)hint; (void)prot; (void)flags; (void)offset;
+    HANDLE hFile = (HANDLE)_get_osfhandle(fd);
+    if (hFile == INVALID_HANDLE_VALUE) return MAP_FAILED;
+    HANDLE hMap = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!hMap) return MAP_FAILED;
+    void *p = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, length);
+    if (!p) { CloseHandle(hMap); return MAP_FAILED; }
+    vox_mmap_entry_t *e = (vox_mmap_entry_t *)malloc(sizeof(*e));
+    if (e) { e->addr = p; e->file_map = hMap; e->next = vox_mmap_list; vox_mmap_list = e; }
+    return p;
+}
+static int munmap(void *addr, size_t length) {
+    (void)length;
+    UnmapViewOfFile(addr);
+    vox_mmap_entry_t **pp = &vox_mmap_list;
+    while (*pp) {
+        if ((*pp)->addr == addr) {
+            vox_mmap_entry_t *e = *pp;
+            *pp = e->next;
+            CloseHandle(e->file_map);
+            free(e);
+            return 0;
+        }
+        pp = &(*pp)->next;
+    }
+    return 0;
+}
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#endif
 
 /* Minimal JSON parser for safetensors header */
 
@@ -208,14 +277,26 @@ safetensors_file_t *safetensors_open(const char *path) {
         return NULL;
     }
 
+#ifdef _WIN32
+    /* GetFileSizeEx gives 64-bit size; MSVC's struct stat.st_size is 32-bit
+     * and would truncate the ~8.9 GB model file. */
+    LARGE_INTEGER win_size;
+    HANDLE h_for_size = (HANDLE)_get_osfhandle(fd);
+    if (h_for_size == INVALID_HANDLE_VALUE || !GetFileSizeEx(h_for_size, &win_size)) {
+        fprintf(stderr, "safetensors_open: GetFileSizeEx failed\n");
+        close(fd);
+        return NULL;
+    }
+    size_t file_size = (size_t)win_size.QuadPart;
+#else
     struct stat st;
     if (fstat(fd, &st) < 0) {
         perror("safetensors_open: fstat failed");
         close(fd);
         return NULL;
     }
-
     size_t file_size = (size_t)st.st_size;
+#endif
     if (file_size < 8) {
         fprintf(stderr, "safetensors_open: file too small\n");
         close(fd);
