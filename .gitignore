@@ -9,6 +9,11 @@ build/
 # Tauri build artifacts
 src-tauri/target/
 
+# Local Cargo build config can contain machine-specific compiler paths
+src-tauri/.cargo/config
+src-tauri/.cargo/config.toml
+src-tauri/.cargo/*.local.toml
+
 # Logs
 logs
 *.log

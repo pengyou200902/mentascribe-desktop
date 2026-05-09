@@ -21,7 +21,7 @@ MentaScribe runs on macOS, Windows, and Linux. macOS is the primary development 
 
 | Feature | macOS | Windows | Linux |
 |---------|:-----:|:-------:|:-----:|
-| Whisper transcription | CoreML + Metal GPU | CPU only | CPU only (OpenBLAS) |
+| Whisper transcription | CoreML + Metal GPU | CUDA GPU | CPU only (OpenBLAS) |
 | Voxtral transcription | Metal GPU | CPU only (slow) | CPU only (OpenBLAS) |
 | Dictation overlay | NSPanel (non-activating, above fullscreen) | Always-on-top (basic) | Always-on-top (basic) |
 | Widget opacity | Native alpha control | Not yet implemented | Not yet implemented |
@@ -32,7 +32,7 @@ MentaScribe runs on macOS, Windows, and Linux. macOS is the primary development 
 
 **macOS** provides the best experience thanks to hardware acceleration (Neural Engine via CoreML, Metal GPU), the NSPanel-based overlay that doesn't steal focus from other apps, and native accessibility text injection. If you're choosing a platform, macOS on Apple Silicon is recommended.
 
-**Windows and Linux** support is functional — audio capture, Whisper transcription (CPU), hotkeys, clipboard/keyboard text injection, and the dashboard all work. GPU acceleration and the advanced overlay features are areas for future improvement. Contributions welcome!
+**Windows and Linux** support is functional — audio capture, Whisper transcription, hotkeys, clipboard/keyboard text injection, and the dashboard all work. Windows builds use CUDA for Whisper GPU acceleration. Contributions welcome!
 
 ## Getting Started
 
@@ -56,6 +56,8 @@ The app uses macOS private APIs (`macOSPrivateApi: true`) for the NSPanel-based 
 <summary><strong>Windows</strong></summary>
 
 - Visual Studio Build Tools with C++ workload
+- CUDA Toolkit for Whisper GPU builds
+- Ninja, available on `PATH` or installed with Visual Studio
 - WebView2 (usually pre-installed on Windows 11)
 </details>
 
@@ -91,7 +93,7 @@ npm run tauri dev
 npm run tauri build
 
 # Start development with Voxtral model support
-pnpm tauri dev --features voxtral
+npm run tauri dev -- --features voxtral
 ```
 
 Build output:
@@ -183,6 +185,8 @@ mentascribe-desktop/
 | `npm run typecheck` | Type-check without emitting |
 | `cargo test` | Run Rust tests |
 | `cargo clippy` | Lint Rust code |
+
+On Windows, `npm run tauri` wraps the Tauri CLI with CUDA/CMake environment setup for Whisper GPU builds. If Visual Studio or Ninja is installed in a custom location, set `CMAKE_CUDA_HOST_COMPILER` and `CMAKE_MAKE_PROGRAM` before running the command.
 
 ## License
 

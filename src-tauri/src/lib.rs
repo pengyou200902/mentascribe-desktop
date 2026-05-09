@@ -168,7 +168,15 @@ fn show_dictation_no_activate(_app: &tauri::AppHandle) {
         let hwnd = FindWindowW(None, w!("MentaScribe"));
         if hwnd == HWND(0) { return; }
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 

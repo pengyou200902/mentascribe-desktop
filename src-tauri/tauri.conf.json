@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "identifier": "ai.mentaflux.voice.mentascribe",
   "build": {
-    "beforeBuildCommand": "pnpm build",
-    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
