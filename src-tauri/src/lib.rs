@@ -1297,16 +1297,71 @@ fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), Str
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
-    use tauri::Manager;
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetWindowRect, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
+    };
+
     if let Some(win) = app.get_webview_window("dictation") {
-        win.set_size(tauri::LogicalSize::new(width, height))
-            .map_err(|e| e.to_string())?;
+        let raw_hwnd = win.hwnd().map_err(|e| e.to_string())?;
+        let hwnd = HWND(raw_hwnd.0 as isize);
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let new_width = (width * scale).round().max(1.0) as i32;
+        let new_height = (height * scale).round().max(1.0) as i32;
 
         let is_draggable = app.state::<AppState>().settings.lock()
             .map(|s| s.widget.draggable)
             .unwrap_or(false);
-        if !is_draggable {
-            position_windows_dictation_on_cursor_monitor(&app, false)?;
+
+        unsafe {
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            GetWindowRect(hwnd, &mut rect)
+                .map_err(|e| format!("Failed to get pill window rect: {}", e))?;
+
+            let (x, y) = if is_draggable {
+                // Preserve the user's dragged center and bottom edge, matching macOS resize anchoring.
+                let center_x = rect.left + (rect.right - rect.left) / 2;
+                let bottom = rect.bottom;
+                (center_x - new_width / 2, bottom - new_height)
+            } else {
+                // Non-draggable mode is canonical: stay bottom-center on the cursor monitor.
+                let mut cursor = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut cursor)
+                    .map_err(|e| format!("Failed to get cursor position: {}", e))?;
+
+                let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+                if monitor.0 == 0 {
+                    return Err("No monitor found for cursor".to_string());
+                }
+
+                let mut info: MONITORINFO = std::mem::zeroed();
+                info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+                if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+                    return Err("Failed to read monitor work area".to_string());
+                }
+
+                let offset = (DOCK_OFFSET * scale).round() as i32;
+                let work = info.rcWork;
+                let work_width = work.right - work.left;
+                (
+                    work.left + (work_width - new_width) / 2,
+                    work.bottom - new_height - offset,
+                )
+            };
+
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                x,
+                y,
+                new_width,
+                new_height,
+                SWP_NOACTIVATE,
+            )
+            .map_err(|e| format!("Failed to resize pill: {}", e))?;
         }
     }
     Ok(())
