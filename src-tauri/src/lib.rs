@@ -128,20 +128,25 @@ fn apply_panel_opacity(app: &tauri::AppHandle, opacity: f64) {
 /// WS_EX_NOACTIVATE prevents the window from stealing focus when shown or clicked,
 /// so SendInput keystrokes always reach the target app (not our overlay).
 #[cfg(target_os = "windows")]
-fn setup_dictation_panel(_app: &tauri::AppHandle) {
+fn setup_dictation_panel(app: &tauri::AppHandle) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
         WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
-    use windows::core::w;
 
     unsafe {
-        let hwnd = FindWindowW(None, w!("MentaScribe"));
-        if hwnd == HWND(0) {
-            eprintln!("[windows] WARNING: dictation window not found by title");
+        let Some(window) = app.get_webview_window("dictation") else {
+            eprintln!("[windows] WARNING: dictation window not found");
             return;
-        }
+        };
+        let hwnd = match window.hwnd() {
+            Ok(hwnd) => HWND(hwnd.0 as isize),
+            Err(e) => {
+                eprintln!("[windows] WARNING: dictation HWND unavailable: {}", e);
+                return;
+            }
+        };
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let new_style = ex_style
             | WS_EX_NOACTIVATE.0 as isize
@@ -156,17 +161,21 @@ fn setup_dictation_panel(_app: &tauri::AppHandle) {
 /// Uses ShowWindow(SW_SHOWNOACTIVATE) + SetWindowPos(SWP_NOACTIVATE) instead of
 /// Tauri's window.show() which internally calls ShowWindow(SW_SHOW) and activates.
 #[cfg(target_os = "windows")]
-fn show_dictation_no_activate(_app: &tauri::AppHandle) {
+fn show_dictation_no_activate(app: &tauri::AppHandle) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, ShowWindow, SetWindowPos,
+        ShowWindow, SetWindowPos,
         SW_SHOWNOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, HWND_TOPMOST,
     };
-    use windows::core::w;
 
     unsafe {
-        let hwnd = FindWindowW(None, w!("MentaScribe"));
-        if hwnd == HWND(0) { return; }
+        let Some(window) = app.get_webview_window("dictation") else {
+            return;
+        };
+        let Ok(raw_hwnd) = window.hwnd() else {
+            return;
+        };
+        let hwnd = HWND(raw_hwnd.0 as isize);
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         let _ = SetWindowPos(
             hwnd,
@@ -523,6 +532,11 @@ fn update_settings(
         if !new_draggable {
             eprintln!("[settings] Snapping widget to bottom-center (draggable OFF)");
             native_position_on_cursor_monitor(&app, false).ok();
+        }
+        #[cfg(target_os = "windows")]
+        if !new_draggable {
+            eprintln!("[settings] Snapping widget to bottom-center (draggable OFF)");
+            position_windows_dictation_on_cursor_monitor(&app, false).ok();
         }
     }
 
@@ -1280,7 +1294,25 @@ fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), Str
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("dictation") {
+        win.set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+
+        let is_draggable = app.state::<AppState>().settings.lock()
+            .map(|s| s.widget.draggable)
+            .unwrap_or(false);
+        if !is_draggable {
+            position_windows_dictation_on_cursor_monitor(&app, false)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 #[tauri::command]
 fn resize_pill(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
     use tauri::Manager;
@@ -1359,6 +1391,95 @@ fn open_dashboard_window(app: &tauri::AppHandle, page: Option<&str>) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn position_windows_dictation_on_cursor_monitor(
+    app: &tauri::AppHandle,
+    only_if_different_monitor: bool,
+) -> Result<bool, String> {
+    use std::mem::{size_of, zeroed};
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOSIZE,
+    };
+
+    let window = app
+        .get_webview_window("dictation")
+        .ok_or_else(|| "Dictation window not found".to_string())?;
+
+    if !window.is_visible().unwrap_or(false) {
+        return Ok(false);
+    }
+
+    let window_size = window
+        .outer_size()
+        .unwrap_or(tauri::PhysicalSize::new(140, 48));
+    let current_pos = window
+        .outer_position()
+        .unwrap_or(tauri::PhysicalPosition::new(0, 0));
+    let raw_hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    let hwnd = HWND(raw_hwnd.0 as isize);
+
+    unsafe {
+        let mut cursor = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut cursor).map_err(|e| format!("Failed to get cursor position: {}", e))?;
+
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        if monitor.0 == 0 {
+            return Err("No monitor found for cursor".to_string());
+        }
+
+        let mut info: MONITORINFO = zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return Err("Failed to read monitor work area".to_string());
+        }
+
+        if only_if_different_monitor {
+            let window_center_x = current_pos.x + window_size.width as i32 / 2;
+            let window_center_y = current_pos.y + window_size.height as i32 / 2;
+            let monitor_rect = info.rcMonitor;
+            let window_on_same_monitor = window_center_x >= monitor_rect.left
+                && window_center_x < monitor_rect.right
+                && window_center_y >= monitor_rect.top
+                && window_center_y < monitor_rect.bottom;
+
+            if window_on_same_monitor {
+                return Ok(false);
+            }
+        }
+
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let offset = (DOCK_OFFSET * scale).round() as i32;
+        let work = info.rcWork;
+        let work_width = work.right - work.left;
+        let width = window_size.width as i32;
+        let height = window_size.height as i32;
+        let x = work.left + (work_width - width) / 2;
+        let y = work.bottom - height - offset;
+
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+        .map_err(|e| format!("Failed to set position: {}", e))?;
+
+        eprintln!(
+            "[windows_pos] Positioned at ({}, {}) in work area ({},{})-({},{})",
+            x, y, work.left, work.top, work.right, work.bottom
+        );
+
+        Ok(true)
+    }
+}
+
 /// Reposition dictation window to the monitor where the mouse currently is.
 /// Returns true if window was moved to a different monitor.
 #[tauri::command]
@@ -1385,7 +1506,12 @@ fn reposition_to_mouse_monitor(app: tauri::AppHandle) -> Result<bool, String> {
         return native_position_on_cursor_monitor(&app, true);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        return position_windows_dictation_on_cursor_monitor(&app, true);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
         // Non-macOS fallback using tao APIs
         let _cursor_pos = window.cursor_position()
@@ -1463,7 +1589,7 @@ fn toggle_dictation_window(app: &tauri::AppHandle) {
                 #[cfg(target_os = "windows")]
                 {
                     eprintln!("[toggle] Repositioning to cursor monitor (draggable=false)");
-                    match reposition_to_mouse_monitor(app.clone()) {
+                    match position_windows_dictation_on_cursor_monitor(app, false) {
                         Ok(moved) => eprintln!("[toggle] Position result: moved={}", moved),
                         Err(e) => eprintln!("[toggle] Position ERROR: {}", e),
                     }
@@ -1643,7 +1769,7 @@ pub fn run() {
             }
             #[cfg(target_os = "windows")]
             {
-                reposition_to_mouse_monitor(app_handle.clone()).ok();
+                position_windows_dictation_on_cursor_monitor(&app_handle, false).ok();
             }
 
             // Build tray menu (shown on right-click)
