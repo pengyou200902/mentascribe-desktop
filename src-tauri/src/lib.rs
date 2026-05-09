@@ -1358,10 +1358,44 @@ fn is_cursor_over_pill(app: tauri::AppHandle) -> Result<bool, String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn is_cursor_over_pill(app: tauri::AppHandle) -> Result<bool, String> {
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+    let Some(window) = app.get_webview_window("dictation") else {
+        return Ok(false);
+    };
+
+    if !window.is_visible().unwrap_or(false) {
+        return Ok(false);
+    }
+
+    let raw_hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    let hwnd = HWND(raw_hwnd.0 as isize);
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let padding = (CURSOR_PROXIMITY_PADDING * scale).round() as i32;
+
+    unsafe {
+        let mut cursor = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut cursor).map_err(|e| format!("Failed to get cursor position: {}", e))?;
+
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect)
+            .map_err(|e| format!("Failed to get pill window rect: {}", e))?;
+
+        Ok(cursor.x >= rect.left - padding
+            && cursor.x <= rect.right + padding
+            && cursor.y >= rect.top - padding
+            && cursor.y <= rect.bottom + padding)
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 #[tauri::command]
 fn is_cursor_over_pill(_app: tauri::AppHandle) -> Result<bool, String> {
-    // Non-macOS: fall back to always false (JS events handle hover)
+    // Linux: fall back to always false (JS events handle hover)
     Ok(false)
 }
 
